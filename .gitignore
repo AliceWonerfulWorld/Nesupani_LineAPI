@@ -17,6 +17,10 @@ yarn.lock
 .env.test.local
 .env.production.local
 
+# Firebase設定
+serviceAccountKey.json
+firebase-adminsdk-*.json
+
 # エディタ設定
 .vscode/
 .idea/
