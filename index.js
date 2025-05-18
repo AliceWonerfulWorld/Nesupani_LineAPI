@@ -10,6 +10,11 @@ const config = {
 const client = new line.Client(config);
 const app = express();
 
+// 簡単なルートエンドポイント（ヘルスチェック用）
+app.get('/', (req, res) => {
+  res.send('LINE Bot サーバーが稼働中です。');
+});
+
 // LINEの署名検証 + JSON解析
 app.post('/webhook', line.middleware(config), (req, res) => {
   Promise.all(req.body.events.map(handleEvent))
@@ -63,6 +68,12 @@ async function handleEvent(event) {
 }
 
 const port = process.env.PORT || 3000;
-app.listen(port, () => {
-  console.log(`LINE Webhookサーバーが起動しました（ポート: ${port}）`);
-});
+try {
+  app.listen(port, () => {
+    console.log(`LINE Webhookサーバーが起動しました（ポート: ${port}）`);
+    console.log(`環境変数: CHANNEL_ACCESS_TOKEN=${process.env.CHANNEL_ACCESS_TOKEN ? '設定済み' : '未設定'}`);
+    console.log(`環境変数: CHANNEL_SECRET=${process.env.CHANNEL_SECRET ? '設定済み' : '未設定'}`);
+  });
+} catch (error) {
+  console.error('サーバー起動エラー:', error);
+}
