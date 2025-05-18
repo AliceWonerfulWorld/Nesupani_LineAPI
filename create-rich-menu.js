@@ -31,8 +31,7 @@ const richMenuObject = {
         data: "generate_id",
         displayText: "IDを発行してください" // ユーザーの画面に表示されるテキスト
       }
-    },
-    {
+    },    {
       bounds: {
         x: 833,
         y: 0,
@@ -40,10 +39,9 @@ const richMenuObject = {
         height: 843
       },
       action: {
-        type: "postback",
-        label: "スコア確認",
-        data: "check_score",
-        displayText: "スコアを確認したい"
+        type: "uri",
+        label: "ゲームを遊ぶ",
+        uri: "https://nesupani-react.vercel.app/"
       }
     },
     {
