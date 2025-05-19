@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STAGE3へ移動中</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #fff;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #1DB446;
+        }
+        .button {
+            display: inline-block;
+            background-color: #00B900;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 25px;
+            text-decoration: none;
+            font-weight: bold;
+            margin-top: 20px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        .info {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f7f7f7;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>STAGE3へ進む</h1>
+        <p>このページは自動的にSTAGE3のゲームへリダイレクトします。</p>
+        <p>もし自動でリダイレクトしない場合は、下のボタンをクリックしてください。</p>        <a href="https://nesugoshipanic.web.app/" class="button">STAGE3へ進む</a>
+        <div class="info">
+            <p>※ このページは外部ブラウザでゲームを開くために使用されます。</p>
+        </div>
+    </div>
+    <script>
+        // 2秒後に自動的にSTAGE3へリダイレクト
+        setTimeout(function() {
+            // URLからIDを抽出
+            const urlParams = new URLSearchParams(window.location.search);
+            const gameId = urlParams.get('id');
+            const redirectUrl = gameId ? 
+                `https://nesugoshipanic.web.app/?id=${gameId}` : 
+                "https://nesugoshipanic.web.app/";
+            window.location.href = redirectUrl;
+        }, 2000);
+    </script>
+</body>
+</html>

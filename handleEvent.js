@@ -1,5 +1,29 @@
+// ランダムID生成関数
+function generateRandomId(length = 3) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let id = '';
+  for (let i = 0; i < length; i++) {
+    id += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return id;
+}
+
+// フレックスメッセージのインポート
+let createStage3FlexMessage;
+try {
+  const flexMessages = require('./flex-messages');
+  createStage3FlexMessage = flexMessages.createStage3FlexMessage;
+} catch (error) {
+  console.error('フレックスメッセージ読み込みエラー:', error);
+  // フォールバック関数
+  createStage3FlexMessage = (stage3Id) => ({
+    type: 'text',
+    text: `STAGE3用のIDは「${stage3Id}」です。\nこのIDをSTAGE3のゲームで入力してください。`
+  });
+}
+
 // イベント処理
-async function handleEvent(event) {
+async function handleEvent(event, db, admin, client) {
   try {
     console.log('Processing event:', JSON.stringify(event));
     
@@ -130,8 +154,7 @@ async function handleEvent(event) {
         };
         return handleEvent(rankingEvent);
       }
-      
-      // 「ID」という単語に反応
+        // 「ID」という単語に反応
       if (text.includes('ID') || text.includes('id') || text.includes('Id')) {
         // ID発行のポストバックデータを模倣
         const idEvent = {
@@ -144,6 +167,94 @@ async function handleEvent(event) {
         return handleEvent(idEvent);
       }
       
+      // デバッグコマンド - STAGE3
+      if (text.includes('デバッグ') && text.includes('STAGE3')) {
+        const userId = event.source.userId;
+        
+        try {
+          // ユーザーの最後に生成したゲームIDを検索
+          const userDoc = await db.collection('users').doc(userId).get();
+          
+          if (!userDoc.exists) {
+            return client.replyMessage(event.replyToken, {
+              type: 'text',
+              text: 'ユーザー情報が見つかりません。先にメニューからIDを発行してください。'
+            });
+          }
+          
+          const userData = userDoc.data();
+          const lastGameId = userData.lastGeneratedGameId;
+          
+          if (!lastGameId) {
+            return client.replyMessage(event.replyToken, {
+              type: 'text',
+              text: 'ゲームIDが見つかりません。メニューからIDを発行してください。'
+            });
+          }
+          
+          // 擬似的にSTAGE1&2をクリア済みとしてマーク
+          await db.collection('gameIds').doc(lastGameId).update({
+            stage1Completed: true,
+            stage2Completed: true,
+            stage1Score: 500,
+            stage2Score: 750,
+            score: 1250,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+          });
+          
+          // STAGE3用の新しいIDを生成
+          let stage3Id = generateRandomId();
+          let isUnique = false;
+          
+          while (!isUnique) {
+            const idCheck = await db.collection('gameIds').doc(stage3Id).get();
+            if (!idCheck.exists) {
+              isUnique = true;
+            } else {
+              stage3Id = generateRandomId();
+            }
+          }          // STAGE3用のIDをFirestoreに保存
+          await db.collection('gameIds').doc(stage3Id).set({
+            lineUserId: userId,
+            originalGameId: lastGameId,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            gameId: stage3Id,
+            stage: 3,
+            stage3Completed: false,
+            score: 0,
+            status: 'active'
+          });
+            
+          return client.replyMessage(event.replyToken, [
+            {
+              type: 'text',
+              text: `🔧 デバッグモード: STAGE3テスト 🔧\n\nSTAGE1&2を完了済みとしてマークしました。\nSTAGE1&2の仮スコア: 1250点\n\nSTAGE3用のIDは「${stage3Id}」です。下のボタンからSTAGE3を開いてください。`
+            },
+            {
+              type: 'template',
+              altText: 'STAGE3へ進む',
+              template: {
+                type: 'buttons',
+                text: 'ボタンを押すと外部ブラウザでSTAGE3が開きます',
+                actions: [
+                  {
+                    type: 'uri',
+                    label: 'STAGE3へ進む',
+                    uri: `https://nesugoshipanic.web.app/?id=${stage3Id}`
+                  }
+                ]
+              }
+            }
+          ]);
+        } catch (error) {
+          console.error('STAGE3デバッグエラー:', error);
+          return client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: 'STAGE3テスト設定中にエラーが発生しました。もう一度お試しください。'
+          });
+        }
+      }
+      
       // その他のメッセージには基本的な返信
       return client.replyMessage(event.replyToken, {
         type: 'text',
@@ -153,7 +264,11 @@ async function handleEvent(event) {
 
     return Promise.resolve(null); // その他は無視
   } catch (error) {
-    console.error('イベント処理中のエラー:', error);
-    return Promise.reject(error);
+    console.error('イベント処理中のエラー:', error);    return Promise.reject(error);
   }
 }
+
+module.exports = {
+  handleEvent,
+  generateRandomId
+};
