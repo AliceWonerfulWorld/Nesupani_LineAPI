@@ -2,6 +2,12 @@ require('dotenv').config();
 const express = require('express');
 const line = require('@line/bot-sdk');
 const admin = require('firebase-admin');
+const { handleEvent, generateRandomId } = require('./handleEvent');
+const { createStage3FlexMessage } = require('./flex-messages');
+
+// サーバーとゲームのURL設定
+const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3000';
+const STAGE3_GAME_URL = process.env.STAGE3_GAME_URL || 'https://nesugoshipanic.web.app/';
 
 // Firebase初期化
 // 環境変数からサービスアカウント情報を取得する方法
@@ -63,6 +69,86 @@ app.use(express.json({
     req.rawBody = buf.toString();
   }
 }));
+
+// 静的ファイルの提供
+app.use(express.static('public'));
+
+// STAGE3リダイレクトエンドポイント
+app.get('/stage3', (req, res) => {
+  // クエリパラメータに含まれるゲームIDを取得（あれば）
+  const gameId = req.query.id || '';
+  
+  // HTMLを動的に生成
+  const html = `
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>STAGE3へ移動中</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #fff;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #1DB446;
+        }
+        .button {
+            display: inline-block;
+            background-color: #00B900;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 25px;
+            text-decoration: none;
+            font-weight: bold;
+            margin-top: 20px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        .info {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #f7f7f7;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>STAGE3へ進む</h1>
+        <p>このページは自動的にSTAGE3のゲームへリダイレクトします。</p>
+        <p>もし自動でリダイレクトしない場合は、下のボタンをクリックしてください。</p>
+        <a href="${STAGE3_GAME_URL}${gameId ? '?id=' + gameId : ''}" class="button">STAGE3へ進む</a>
+        <div class="info">
+            <p>※ このページは外部ブラウザでゲームを開くために使用されます。</p>
+        </div>
+    </div>
+    <script>
+        // 2秒後に自動的にSTAGE3へリダイレクト
+        setTimeout(function() {
+            window.location.href = "${STAGE3_GAME_URL}${gameId ? '?id=' + gameId : ''}";
+        }, 2000);
+    </script>
+</body>
+</html>
+  `;
+  
+  res.send(html);
+  
+  res.send(html);
+});
 
 // 簡単なルートエンドポイント（ヘルスチェック用）
 app.get('/', (req, res) => {
@@ -192,13 +278,13 @@ app.post('/webhook', (req, res) => {
         console.error('Request body is undefined or events array is missing');
         return res.status(400).send('Events array is required');
       }
-    }
-    
+    }    
     const events = req.body.events;
     
     console.log('Processing events:', JSON.stringify(events));
     
-    Promise.all(events.map(handleEvent))
+    // イベント処理関数を呼び出す際に必要な依存関係を渡す
+    Promise.all(events.map(event => handleEvent(event, db, admin, client)))
       .then(result => res.json(result))
       .catch(err => {
         console.error('イベント処理エラー:', err);
@@ -298,27 +384,23 @@ app.post('/api/stage2-completed', async (req, res) => {
       score: 0,
       status: 'active'
     });
-    
-    // ユーザーにSTAGE3用のIDと案内を送信
+      // ユーザーにSTAGE3用のIDと案内を送信
     await client.pushMessage(lineUserId, [
       {
         type: 'text',
-        text: `🎮 STAGE2クリアおめでとうございます！🎮\n\nSTAGE1&2のスコア: ${userData.score + (score || 0)}点`
-      },
-      {
-        type: 'text',
-        text: `次はSTAGE3です！\nSTAGE3用のIDは「${stage3Id}」です。\nこのIDをSTAGE3のゲームで入力してください。`
+        text: `🎮 STAGE2クリアおめでとうございます！🎮\n\nSTAGE1&2のスコア: ${userData.score + (score || 0)}点\n\nSTAGE3用のIDは「${stage3Id}」です。下のボタンからSTAGE3を開いてください。`
       },
       {
         type: 'template',
         altText: 'STAGE3へ進む',
         template: {
           type: 'buttons',
-          text: 'STAGE3をプレイする準備はできましたか？',
-          actions: [            {
+          text: 'ボタンを押すと外部ブラウザでSTAGE3が開きます',
+          actions: [
+            {
               type: 'uri',
               label: 'STAGE3へ進む',
-              uri: 'https://nesugoshipanic.web.app/'
+              uri: `https://nesugoshipanic.web.app/?id=${stage3Id}`
             }
           ]
         }
@@ -424,175 +506,61 @@ app.post('/api/stage3-completed', async (req, res) => {
   }
 });
 
-// ランダムID生成関数
-function generateRandomId(length = 3) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let id = '';
-  for (let i = 0; i < length; i++) {
-    id += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return id;
-}
-
-// イベント処理
-async function handleEvent(event) {
+// STAGE3テスト用のIDを発行するエンドポイント
+app.get('/api/generate-stage3-id/:originalGameId', async (req, res) => {
   try {
-    console.log('Processing event:', JSON.stringify(event));
+    const originalGameId = req.params.originalGameId;
     
-    if (event.type === 'postback') {
-      // ポストバックデータによって処理を分岐
-      const data = event.postback.data;
-      
-      if (data === 'generate_id') {
-        // ユーザーIDを取得
-        const userId = event.source.userId;
-        console.log(`Generating ID for user: ${userId}`);
-        
-        // ランダムIDを生成
-        let randomId = generateRandomId();
-        let isUnique = false;
-        
-        // IDの一意性を確保するためのループ
-        while (!isUnique) {
-          // 既存IDと衝突していないか確認
-          const idCheck = await db.collection('gameIds').doc(randomId).get();
-          
-          if (!idCheck.exists) {
-            isUnique = true;
-          } else {
-            // 衝突した場合は別のIDを生成
-            randomId = generateRandomId();
-          }
-        }
-      
-        try {
-          // FirestoreにデータをIDをキーにして保存
-          await db.collection('gameIds').doc(randomId).set({
-            lineUserId: userId,
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            gameId: randomId,
-            stage1Completed: false,
-            stage2Completed: false,
-            stage3Completed: false,
-            score: 0,
-            status: 'active'
-          });
-          
-          // ユーザー情報も更新/作成
-          await db.collection('users').doc(userId).set({
-            lastActivity: admin.firestore.FieldValue.serverTimestamp(),
-            lastGeneratedGameId: randomId
-          }, { merge: true });
-          
-          console.log(`ID生成成功: ${randomId} (LINE ID: ${userId})`);
-          
-          return client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: `あなたのゲームIDは「${randomId}」です！\nこのIDをゲーム内で入力してプレイしてください。`,
-          });
-        } catch (error) {
-          console.error('Firestore保存エラー:', error);
-          return client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: 'IDの発行中にエラーが発生しました。もう一度お試しください。',
-          });
-        }
-      } else if (data === 'check_score') {
-        // スコア確認の処理（今後実装）
-        return client.replyMessage(event.replyToken, {
-          type: 'text',
-          text: `スコア確認機能は現在開発中です。もう少々お待ちください。`,
-        });
-      } else if (data === 'show_ranking') {
-        try {
-          // 上位5名のスコアを取得
-          const snapshot = await db.collection('gameIds')
-            .orderBy('score', 'desc')
-            .limit(5)
-            .get();
-          
-          if (snapshot.empty) {
-            return client.replyMessage(event.replyToken, {
-              type: 'text',
-              text: 'まだランキングデータがありません。'
-            });
-          }
-          
-          // ランキングテキストを構築
-          let rankingText = "🏆 スコアランキング 🏆\n\n";
-          let rank = 1;
-          
-          snapshot.forEach(doc => {
-            const data = doc.data();
-            rankingText += `${rank}位: ID ${data.gameId} - ${data.score}点\n`;
-            rank++;
-          });
-          
-          return client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: rankingText
-          });
-        } catch (error) {
-          console.error('ランキング取得エラー:', error);
-          return client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: 'ランキングの取得中にエラーが発生しました。'
-          });
-        }
+    // 元のゲームIDの存在確認
+    const gameDoc = await db.collection('gameIds').doc(originalGameId).get();
+    
+    if (!gameDoc.exists) {
+      return res.status(404).json({ success: false, message: 'ゲームIDが見つかりません' });
+    }
+    
+    const userData = gameDoc.data();
+    const lineUserId = userData.lineUserId;
+    
+    // STAGE3用の新しいIDを生成
+    let stage3Id = generateRandomId();
+    let isUnique = false;
+    
+    while (!isUnique) {
+      const idCheck = await db.collection('gameIds').doc(stage3Id).get();
+      if (!idCheck.exists) {
+        isUnique = true;
+      } else {
+        stage3Id = generateRandomId();
       }
     }
     
-    // テキストメッセージの処理を追加
-    if (event.type === 'message' && event.message.type === 'text') {
-      const text = event.message.text;
-      
-      // 「ゲーム」「プレイ」などの単語に反応
-      if (text.includes('ゲーム') || text.includes('プレイ') || text.includes('遊ぶ')) {
-        return client.replyMessage(event.replyToken, {
-          type: 'text',
-          text: 'ゲームをプレイするには、メニューから「ID発行」を選択してIDを発行してください。そのIDをゲーム内で入力してプレイできます。'
-        });
-      }
-      
-      // 「ランキング」という単語に反応
-      if (text.includes('ランキング') || text.includes('順位')) {
-        // ランキング表示のポストバックデータを模倣
-        const rankingEvent = {
-          ...event,
-          type: 'postback',
-          postback: {
-            data: 'show_ranking'
-          }
-        };
-        return handleEvent(rankingEvent);
-      }
-      
-      // 「ID」という単語に反応
-      if (text.includes('ID') || text.includes('id') || text.includes('Id')) {
-        // ID発行のポストバックデータを模倣
-        const idEvent = {
-          ...event,
-          type: 'postback',
-          postback: {
-            data: 'generate_id'
-          }
-        };
-        return handleEvent(idEvent);
-      }
-      
-      // その他のメッセージには基本的な返信
-      return client.replyMessage(event.replyToken, {
-        type: 'text',
-        text: 'こんにちは！メニューから「ID発行」を選ぶとゲームが遊べます。「ゲームを遊ぶ」でゲームページへ移動できます。'
-      });
-    }
-
-    return Promise.resolve(null); // その他は無視
+    // STAGE3用のIDをFirestoreに保存
+    await db.collection('gameIds').doc(stage3Id).set({
+      lineUserId: lineUserId,
+      originalGameId: originalGameId,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      gameId: stage3Id,
+      stage: 3,
+      stage3Completed: false,
+      score: 0,
+      status: 'active'
+    });
+    
+    // 成功レスポンスを返す
+    return res.json({
+      success: true,
+      message: 'STAGE3用IDが生成されました',
+      stage3Id: stage3Id,
+      originalGameId: originalGameId,
+      originalScore: userData.score || 0
+    });
   } catch (error) {
-    console.error('イベント処理中のエラー:', error);
-    return Promise.reject(error);
+    console.error('STAGE3 ID生成エラー:', error);
+    return res.status(500).json({ success: false, message: 'サーバーエラーが発生しました' });
   }
-}
+});
+
+// ランダムID生成関数はhandleEvent.jsに移動しました
 
 const port = process.env.PORT || 3000;
 try {

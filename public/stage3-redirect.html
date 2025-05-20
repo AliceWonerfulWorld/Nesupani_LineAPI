@@ -1,43 +1,3 @@
-const functions = require('firebase-functions');
-const express = require('express');
-const line = require('@line/bot-sdk');
-const admin = require('firebase-admin');
-const path = require('path');
-
-// Import handlers
-const { handleEvent, generateRandomId } = require('./handleEvent');
-
-// Firebase initialization
-admin.initializeApp();
-const db = admin.firestore();
-
-// LINE client config
-const config = {
-  channelAccessToken: process.env.CHANNEL_ACCESS_TOKEN || functions.config().line.channel_access_token,
-  channelSecret: process.env.CHANNEL_SECRET || functions.config().line.channel_secret,
-};
-
-// Game URL setting
-const STAGE3_GAME_URL = 'https://nesugoshipanic.web.app/';
-
-// Create Express app
-const app = express();
-
-// JSON parsing middleware
-app.use(express.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf.toString();
-  }
-}));
-
-// Serve static files
-app.use(express.static(path.join(__dirname, 'public')));
-
-// STAGE3 redirect endpoint
-app.get('/stage3', (req, res) => {
-  const gameId = req.query.id || '';
-  
-  const html = `
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -87,8 +47,7 @@ app.get('/stage3', (req, res) => {
     <div class="container">
         <h1>STAGE3へ進む</h1>
         <p>このページは自動的にSTAGE3のゲームへリダイレクトします。</p>
-        <p>もし自動でリダイレクトしない場合は、下のボタンをクリックしてください。</p>
-        <a href="${STAGE3_GAME_URL}${gameId ? '?id=' + gameId : ''}" class="button">STAGE3へ進む</a>
+        <p>もし自動でリダイレクトしない場合は、下のボタンをクリックしてください。</p>        <a href="https://nesugoshipanic.web.app/" class="button">STAGE3へ進む</a>
         <div class="info">
             <p>※ このページは外部ブラウザでゲームを開くために使用されます。</p>
         </div>
@@ -96,22 +55,14 @@ app.get('/stage3', (req, res) => {
     <script>
         // 2秒後に自動的にSTAGE3へリダイレクト
         setTimeout(function() {
-            window.location.href = "${STAGE3_GAME_URL}${gameId ? '?id=' + gameId : ''}";
+            // URLからIDを抽出
+            const urlParams = new URLSearchParams(window.location.search);
+            const gameId = urlParams.get('id');
+            const redirectUrl = gameId ? 
+                `https://nesugoshipanic.web.app/?id=${gameId}` : 
+                "https://nesugoshipanic.web.app/";
+            window.location.href = redirectUrl;
         }, 2000);
     </script>
 </body>
 </html>
-  `;
-  
-  res.send(html);
-});
-
-// Root endpoint (health check)
-app.get('/', (req, res) => {
-  res.send('LINE Bot サーバーが稼働中です。');
-});
-
-// Rest of APIs...
-
-// Export Express app as Firebase Function
-exports.app = functions.https.onRequest(app);
