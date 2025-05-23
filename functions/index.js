@@ -588,6 +588,7 @@ app.get('/line-login-callback', async (req, res) => {
       }
     );
 
+
     const idToken = tokenRes.data.id_token;
     if (!idToken) return res.status(400).send('id_tokenが取得できません');
 
@@ -596,10 +597,180 @@ app.get('/line-login-callback', async (req, res) => {
     const email = decoded.email;
     const lineUserId = decoded.sub;
 
-    if (!email || !lineUserId) return res.status(400).send('メールアドレスまたはuserIdが取得できません');
+    // メールアドレス未登録の場合の専用エラー画面
+    if (!email) {
+      return res.status(400).send(`
+        <!DOCTYPE html>
+        <html lang="ja">
+        <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>メールアドレス未登録</title>
+          <style>
+            body {
+              background: linear-gradient(135deg, #ffb36b 0%, #ff6f6f 100%);
+              min-height: 100vh;
+              margin: 0;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-family: 'Segoe UI', 'Hiragino Sans', 'Meiryo', sans-serif;
+            }
+            .card {
+              background: #fff;
+              border-radius: 18px;
+              box-shadow: 0 4px 24px rgba(0,0,0,0.12);
+              padding: 40px 32px 32px 32px;
+              max-width: 370px;
+              width: 100%;
+              text-align: center;
+              animation: fadeIn 0.7s;
+            }
+            @keyframes fadeIn {
+              from { opacity: 0; transform: translateY(30px); }
+              to { opacity: 1; transform: none; }
+            }
+            .errormark {
+              width: 70px;
+              height: 70px;
+              margin: 0 auto 18px auto;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+            }
+            .errormark svg {
+              width: 70px;
+              height: 70px;
+              display: block;
+            }
+            h1 {
+              color: #ff6f6f;
+              font-size: 1.5rem;
+              margin: 0 0 10px 0;
+              font-weight: 700;
+            }
+            p {
+              color: #333;
+              font-size: 1.1rem;
+              margin: 0 0 18px 0;
+            }
+            .close-desc {
+              color: #888;
+              font-size: 0.97em;
+              margin-bottom: 10px;
+            }
+            .close-btn {
+              display: inline-block;
+              background: linear-gradient(90deg, #ff6f6f 0%, #ffb36b 100%);
+              color: #fff;
+              border: none;
+              border-radius: 25px;
+              padding: 12px 32px;
+              font-size: 1rem;
+              font-weight: bold;
+              cursor: pointer;
+              box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+              margin-top: 10px;
+              transition: background 0.2s;
+            }
+            .close-btn:hover {
+              background: linear-gradient(90deg, #ffb36b 0%, #ff6f6f 100%);
+            }
+          </style>
+          <script>
+            function closeWindow() {
+              if (window.navigator.userAgent.includes('Line/')) {
+                window.close();
+              } else {
+                history.back();
+              }
+            }
+          </script>
+        </head>
+        <body>
+          <div class="card">
+            <div class="errormark">
+              <svg viewBox="0 0 52 52"><circle cx="26" cy="26" r="25" fill="#faeaea"/><path fill="none" stroke="#ff6f6f" stroke-width="5" d="M16 16l20 20M36 16l-20 20"/></svg>
+            </div>
+            <h1>メールアドレス未登録</h1>
+            <p>LINEアカウントにメールアドレスが登録されていないため、ID発行ができません。<br>LINEアプリの「設定」→「アカウント」→「メールアドレス」から登録してください。</p>
+            <div class="close-desc">画面を閉じてLINEに戻ってください。<br>※ボタンで閉じない場合は、画面右上の「×」で閉じてください。</div>
+            <button class="close-btn" onclick="closeWindow()">画面を閉じる</button>
+          </div>
+        </body>
+        </html>
+      `);
+    }
+    if (!lineUserId) return res.status(400).send('userIdが取得できません');
 
     // Firestoreに保存
     await db.collection('users').doc(lineUserId).set({ email }, { merge: true });
+
+    // --- ここからメール送信処理 ---
+    // nodemailerでGmail経由でメール送信（functions.config().gmail から設定取得）
+    const nodemailer = require('nodemailer');
+    const gmailConfig = functions.config().gmail || {};
+    let mailSendResult = '';
+    if (gmailConfig.user && gmailConfig.pass) {
+      try {
+        // FirestoreからSTAGE1のgameIdを取得（なければ新規発行）
+        let gameId = null;
+        // 既存のgameIdを検索
+        const gameIdSnap = await db.collection('gameIds')
+          .where('lineUserId', '==', lineUserId)
+          .where('stage', '==', 1)
+          .limit(1)
+          .get();
+        if (!gameIdSnap.empty) {
+          gameId = gameIdSnap.docs[0].id;
+        } else {
+          // 新規発行
+          const { generateRandomId } = require('./handleEvent');
+          let newId = generateRandomId();
+          let isUnique = false;
+          while (!isUnique) {
+            const idCheck = await db.collection('gameIds').doc(newId).get();
+            if (!idCheck.exists) {
+              isUnique = true;
+            } else {
+              newId = generateRandomId();
+            }
+          }
+          await db.collection('gameIds').doc(newId).set({
+            lineUserId: lineUserId,
+            createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            gameId: newId,
+            stage: 1,
+            status: 'new',
+            score: 0
+          });
+          gameId = newId;
+        }
+        // メール送信
+        const stage1Url = `https://nesugoshipanic.web.app/?id=${gameId}`;
+        const transporter = nodemailer.createTransport({
+          service: 'gmail',
+          auth: {
+            user: gmailConfig.user,
+            pass: gmailConfig.pass
+          }
+        });
+        // 迷惑メール対策: 件名・本文・差出人名を工夫
+        await transporter.sendMail({
+          from: `寝過ごしパニック運営事務局 <${gmailConfig.user}>`,
+          to: email,
+          subject: '【寝過ごしパニック】STAGE1ゲームURLのご案内（LINE公式アカウントより）',
+          text: `このメールは、あなたのLINE公式アカウントでID発行リクエストがあったため自動送信しています。\n\nSTAGE1のゲームURLはこちらです:\n${stage1Url}\n\n※このメールが迷惑メールに振り分けられた場合は、「迷惑メールでない」と設定してください。\nご不明な点があればLINE公式アカウントまでご連絡ください。`,
+          html: `<p>このメールは、あなたのLINE公式アカウントでID発行リクエストがあったため自動送信しています。</p><p>STAGE1のゲームURLはこちらです：<br><a href="${stage1Url}">${stage1Url}</a></p><p>※このメールが迷惑メールに振り分けられた場合は、「迷惑メールでない」と設定してください。<br>ご不明な点があればLINE公式アカウントまでご連絡ください。</p>`
+        });
+        mailSendResult = 'メール送信成功';
+      } catch (mailErr) {
+        console.error('メール送信エラー:', mailErr);
+        mailSendResult = 'メール送信失敗: ' + (mailErr.message || mailErr);
+      }
+    } else {
+      mailSendResult = 'メール送信設定が未構成です';
+    }
 
     // おしゃれなHTMLで認証完了画面を返す（閉じない場合の案内付き）
     res.send(`
@@ -697,7 +868,9 @@ app.get('/line-login-callback', async (req, res) => {
           </div>
           <h1>認証完了</h1>
           <p>認証・メールアドレス取得が完了しました。</p>
+          <p style="color:#1DB446;font-size:1.05em;">STAGE1のゲームURLをメールで送信しました。</p>
           <div class="close-desc">画面を閉じてLINEに戻ってください。<br>※ボタンで閉じない場合は、画面右上の「×」で閉じてください。</div>
+          <div style="color:#888;font-size:0.95em;margin-bottom:8px;">${mailSendResult}</div>
           <button class="close-btn" onclick="closeWindow()">画面を閉じる</button>
         </div>
       </body>
