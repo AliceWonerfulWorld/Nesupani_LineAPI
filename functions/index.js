@@ -500,21 +500,17 @@ app.post('/api/stage3-completed', async (req, res) => {
 app.get('/api/generate-stage3-id/:originalGameId', async (req, res) => {
   try {
     const originalGameId = req.params.originalGameId;
-    
     // 元のゲームIDの存在確認
     const gameDoc = await db.collection('gameIds').doc(originalGameId).get();
-    
     if (!gameDoc.exists) {
       return res.status(404).json({ success: false, message: 'ゲームIDが見つかりません' });
     }
-    
     const userData = gameDoc.data();
     const lineUserId = userData.lineUserId;
-    
-    // STAGE3用の新しいIDを生成
+
+    // STAGE3用の新しいIDを毎回生成
     let stage3Id = generateRandomId();
     let isUnique = false;
-    
     while (!isUnique) {
       const idCheck = await db.collection('gameIds').doc(stage3Id).get();
       if (!idCheck.exists) {
@@ -523,7 +519,7 @@ app.get('/api/generate-stage3-id/:originalGameId', async (req, res) => {
         stage3Id = generateRandomId();
       }
     }
-    
+
     // STAGE3用のIDをFirestoreに保存
     await db.collection('gameIds').doc(stage3Id).set({
       lineUserId: lineUserId,
@@ -535,14 +531,56 @@ app.get('/api/generate-stage3-id/:originalGameId', async (req, res) => {
       score: 0,
       status: 'stage2'
     });
-    
+
+    // メール送信処理
+    // ユーザーのメールアドレスを取得
+    let email = null;
+    // usersコレクションから取得
+    const userDoc = await db.collection('users').doc(lineUserId).get();
+    if (userDoc.exists && userDoc.data().email) {
+      email = userDoc.data().email;
+    }
+
+    let mailSendResult = '';
+    const gmailConfig = functions.config().gmail || {};
+    if (gmailConfig.user && gmailConfig.pass && email) {
+      try {
+        const stage3Url = `https://nesugoshipanic.web.app/?id=${stage3Id}`;
+        const nodemailer = require('nodemailer');
+        const transporter = nodemailer.createTransport({
+          service: 'gmail',
+          auth: {
+            user: gmailConfig.user,
+            pass: gmailConfig.pass
+          }
+        });
+        await transporter.sendMail({
+          from: `寝過ごしパニック運営事務局 <${gmailConfig.user}>`,
+          to: email,
+          subject: '【寝過ごしパニック】STAGE3ゲームURLのご案内（デバッグコマンド発行）',
+          text: `このメールはデバッグ用コマンドでSTAGE3 IDを発行したため自動送信しています。\n\nSTAGE3のゲームURLはこちらです:\n${stage3Url}\n\nあなた専用のID: ${stage3Id}\n\n※このメールが迷惑メールに振り分けられた場合は、「迷惑メールでない」と設定してください。\nご不明な点があればLINE公式アカウントまでご連絡ください。`,
+          html: `<p>このメールはデバッグ用コマンドでSTAGE3 IDを発行したため自動送信しています。</p><p>STAGE3のゲームURLはこちらです：<br><a href="${stage3Url}">${stage3Url}</a></p><p>あなた専用のID: <b>${stage3Id}</b></p><p>※このメールが迷惑メールに振り分けられた場合は、「迷惑メールでない」と設定してください。<br>ご不明な点があればLINE公式アカウントまでご連絡ください。</p>`
+        });
+        mailSendResult = 'メール送信成功';
+      } catch (mailErr) {
+        console.error('STAGE3メール送信エラー:', mailErr);
+        mailSendResult = 'メール送信失敗: ' + (mailErr.message || mailErr);
+      }
+    } else if (!email) {
+      mailSendResult = 'メールアドレスが登録されていません';
+    } else {
+      mailSendResult = 'メール送信設定が未構成です';
+    }
+
     // 成功レスポンスを返す
     return res.json({
       success: true,
       message: 'STAGE3用IDが生成されました',
       stage3Id: stage3Id,
+      stage3Url: `https://nesugoshipanic.web.app/?id=${stage3Id}`,
       originalGameId: originalGameId,
-      originalScore: userData.score || 0
+      originalScore: userData.score || 0,
+      mailSendResult: mailSendResult
     });
   } catch (error) {
     console.error('STAGE3 ID生成エラー:', error);
@@ -725,7 +763,6 @@ app.get('/line-login-callback', async (req, res) => {
           gameId = gameIdSnap.docs[0].id;
         } else {
           // 新規発行
-          const { generateRandomId } = require('./handleEvent');
           let newId = generateRandomId();
           let isUnique = false;
           while (!isUnique) {
@@ -746,8 +783,8 @@ app.get('/line-login-callback', async (req, res) => {
           });
           gameId = newId;
         }
-        // メール送信
-        const stage1Url = `https://nesugoshipanic.web.app/?id=${gameId}`;
+        // STAGE1のURLにgameIdをクエリパラメータで付与
+        const stage1Url = `https://nesupani-react.vercel.app/bikegame?id=${gameId}`;
         const transporter = nodemailer.createTransport({
           service: 'gmail',
           auth: {
@@ -760,8 +797,8 @@ app.get('/line-login-callback', async (req, res) => {
           from: `寝過ごしパニック運営事務局 <${gmailConfig.user}>`,
           to: email,
           subject: '【寝過ごしパニック】STAGE1ゲームURLのご案内（LINE公式アカウントより）',
-          text: `このメールは、あなたのLINE公式アカウントでID発行リクエストがあったため自動送信しています。\n\nSTAGE1のゲームURLはこちらです:\n${stage1Url}\n\n※このメールが迷惑メールに振り分けられた場合は、「迷惑メールでない」と設定してください。\nご不明な点があればLINE公式アカウントまでご連絡ください。`,
-          html: `<p>このメールは、あなたのLINE公式アカウントでID発行リクエストがあったため自動送信しています。</p><p>STAGE1のゲームURLはこちらです：<br><a href="${stage1Url}">${stage1Url}</a></p><p>※このメールが迷惑メールに振り分けられた場合は、「迷惑メールでない」と設定してください。<br>ご不明な点があればLINE公式アカウントまでご連絡ください。</p>`
+          text: `このメールは、あなたのLINE公式アカウントでID発行リクエストがあったため自動送信しています。\n\nSTAGE1のゲームURLはこちらです:\n${stage1Url}\n\nあなた専用のID: ${gameId}\n\n※このメールが迷惑メールに振り分けられた場合は、「迷惑メールでない」と設定してください。\nご不明な点があればLINE公式アカウントまでご連絡ください。`,
+          html: `<p>このメールは、あなたのLINE公式アカウントでID発行リクエストがあったため自動送信しています。</p><p>STAGE1のゲームURLはこちらです：<br><a href="${stage1Url}">${stage1Url}</a></p><p>あなた専用のID: <b>${gameId}</b></p><p>※このメールが迷惑メールに振り分けられた場合は、「迷惑メールでない」と設定してください。<br>ご不明な点があればLINE公式アカウントまでご連絡ください。</p>`
         });
         mailSendResult = 'メール送信成功';
       } catch (mailErr) {
