@@ -47,15 +47,28 @@
     <div class="container">
         <h1>STAGE3へ進む</h1>
         <p>このページは自動的にSTAGE3のゲームへリダイレクトします。</p>
-        <p>もし自動でリダイレクトしない場合は、下のボタンをクリックしてください。</p>        <a href="https://nesugoshipanic.web.app/" class="button">STAGE3へ進む</a>
+        <p>もし自動でリダイレクトしない場合は、下のボタンを押してください。</p>
+        <a href="#" class="button" id="openExternalBtn">STAGE3へ進む</a>
         <div class="info">
-            <p>※ このページは外部ブラウザでゲームを開くために使用されます。</p>
+            <p>※ LINEアプリ内では自動で外部ブラウザを開けません。必ず下のボタンを押して外部ブラウザで開いてください。</p>
         </div>
+    </div>
+
+<!-- モーダルUIをbody直下に完全移動 -->
+<div id="modal" style="display:none; position:fixed; left:0; top:0; width:100vw; height:100vh; background:rgba(0,0,0,0.5); z-index:10000;">
+  <div style="background:#fff; max-width:90vw; margin:10vh auto; padding:24px; border-radius:8px; text-align:center; box-shadow:0 4px 16px rgba(0,0,0,0.2);">
+    <h2>外部ブラウザで開く必要があります</h2>
+    <p>LINEアプリ内では自動で開けません。<br>
+      下のボタンを押して外部ブラウザ（Safari/Chrome等）で開いてください。</p>
+    <a id="externalLink" href="#" target="_blank" rel="noopener noreferrer" style="display:inline-block; margin:16px 0; padding:12px 24px; background:#00B900; color:#fff; border-radius:25px; text-decoration:none; font-weight:bold;">外部ブラウザで開く</a>
+    <br>
+    <button onclick="document.getElementById('modal').style.display='none';" style="margin-top:8px;">閉じる</button>
+  </div>
+</div>
     </div>
     <script>
         // 2秒後に自動的にSTAGE3へリダイレクト
         setTimeout(function() {
-            // URLからIDを抽出
             const urlParams = new URLSearchParams(window.location.search);
             const gameId = urlParams.get('id');
             const redirectUrl = gameId ? 
@@ -63,6 +76,22 @@
                 "https://nesugoshipanic.web.app/";
             window.location.href = redirectUrl;
         }, 2000);
+
+        // ボタン押下時にモーダル表示
+        document.getElementById('openExternalBtn').onclick = function(e) {
+            e.preventDefault();
+            const urlParams = new URLSearchParams(window.location.search);
+            const gameId = urlParams.get('id');
+            const redirectUrl = gameId ? 
+                `https://nesugoshipanic.web.app/?id=${gameId}` : 
+                "https://nesugoshipanic.web.app/";
+            var modal = document.getElementById('modal');
+            var link = document.getElementById('externalLink');
+            link.href = redirectUrl;
+            modal.style.display = 'block';
+            // スクロールを最上部に固定（スマホでの見落とし防止）
+            window.scrollTo(0, 0);
+        };
     </script>
 </body>
 </html>

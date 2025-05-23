@@ -35,16 +35,15 @@ async function handleEvent(event, db, admin, client) {
         // ユーザーIDを取得
         const userId = event.source.userId;
         console.log(`Generating ID for user: ${userId}`);
-        
+
         // ランダムIDを生成
         let randomId = generateRandomId();
         let isUnique = false;
-        
+
         // IDの一意性を確保するためのループ
         while (!isUnique) {
           // 既存IDと衝突していないか確認
           const idCheck = await db.collection('gameIds').doc(randomId).get();
-          
           if (!idCheck.exists) {
             isUnique = true;
           } else {
@@ -52,7 +51,7 @@ async function handleEvent(event, db, admin, client) {
             randomId = generateRandomId();
           }
         }
-      
+
         try {
           // FirestoreにデータをIDをキーにして保存
           await db.collection('gameIds').doc(randomId).set({
@@ -63,20 +62,83 @@ async function handleEvent(event, db, admin, client) {
             stage2Completed: false,
             stage3Completed: false,
             score: 0,
-            status: 'active'
+            status: 'stage2'
           });
-          
+
           // ユーザー情報も更新/作成
           await db.collection('users').doc(userId).set({
             lastActivity: admin.firestore.FieldValue.serverTimestamp(),
             lastGeneratedGameId: randomId
           }, { merge: true });
-          
+
+          // メール送信処理
+          // nodemailerのセットアップ
+          let nodemailer;
+          try {
+            nodemailer = require('nodemailer');
+          } catch (e) {
+            console.error('nodemailerがインストールされていません。npm install nodemailer を実行してください。');
+            nodemailer = null;
+          }
+
+          // Firestore usersコレクションからメールアドレス取得
+          let email = null;
+          try {
+            const userDoc = await db.collection('users').doc(userId).get();
+            if (userDoc.exists && userDoc.data().email) {
+              email = userDoc.data().email;
+            }
+          } catch (e) {
+            console.error('メールアドレス取得エラー:', e);
+          }
+
+          // デバッグ用ログ
+          console.log('[DEBUG] nodemailer:', nodemailer ? 'OK' : 'NG', 'email:', email);
+          // メールアドレスが存在し、nodemailerが使える場合のみ送信
+          if (email && nodemailer) {
+            // SMTP設定（.envやfunctions.config()から取得してください）
+            const smtpHost = process.env.SMTP_HOST || functions.config().smtp?.host;
+            const smtpPort = process.env.SMTP_PORT || functions.config().smtp?.port || 465;
+            const smtpUser = process.env.SMTP_USER || functions.config().smtp?.user;
+            const smtpPass = process.env.SMTP_PASS || functions.config().smtp?.pass;
+
+            if (smtpHost && smtpUser && smtpPass) {
+              const transporter = nodemailer.createTransport({
+                host: smtpHost,
+                port: smtpPort,
+                secure: true,
+                auth: {
+                  user: smtpUser,
+                  pass: smtpPass
+                }
+              });
+
+              // STAGE1のURLを生成
+              const stage1Url = `https://nesugoshipanic.web.app/?id=${randomId}`;
+              const mailOptions = {
+                from: smtpUser,
+                to: email,
+                subject: '【寝過ごしパニック】ゲームID発行とSTAGE1開始URL',
+                text: `あなたのゲームIDは「${randomId}」です。\n\n下記URLからSTAGE1を開始できます:\n${stage1Url}\n\nこのメールは自動送信です。`
+              };
+              try {
+                await transporter.sendMail(mailOptions);
+                console.log(`メール送信成功: ${email}`);
+              } catch (mailErr) {
+                console.error('メール送信エラー:', mailErr);
+              }
+            } else {
+              console.error('SMTP設定が不足しています。');
+            }
+          } else if (!email) {
+            console.log('メールアドレスがFirestoreに登録されていません。');
+          }
+
           console.log(`ID生成成功: ${randomId} (LINE ID: ${userId})`);
-          
+
           return client.replyMessage(event.replyToken, {
             type: 'text',
-            text: `あなたのゲームIDは「${randomId}」です！\nこのIDをゲーム内で入力してプレイしてください。`,
+            text: `あなたのゲームIDは「${randomId}」です！\nこのIDをゲーム内で入力してプレイしてください。${email ? '\nご登録のメールアドレスにもSTAGE1のURLを送信しました。' : '\nメールアドレスが未登録のためメール送信は行われませんでした。'}`,
           });
         } catch (error) {
           console.error('Firestore保存エラー:', error);
@@ -222,7 +284,7 @@ async function handleEvent(event, db, admin, client) {
             stage: 3,
             stage3Completed: false,
             score: 0,
-            status: 'active'
+            status: 'stage2'
           });
             
           return client.replyMessage(event.replyToken, [

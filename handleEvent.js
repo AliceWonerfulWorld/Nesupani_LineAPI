@@ -63,7 +63,7 @@ async function handleEvent(event, db, admin, client) {
             stage2Completed: false,
             stage3Completed: false,
             score: 0,
-            status: 'active'
+            status: 'stage2'
           });
           
           // ユーザー情報も更新/作成
@@ -222,7 +222,7 @@ async function handleEvent(event, db, admin, client) {
             stage: 3,
             stage3Completed: false,
             score: 0,
-            status: 'active'
+            status: 'stage2'
           });
             
           return client.replyMessage(event.replyToken, [

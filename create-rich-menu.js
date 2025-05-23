@@ -26,10 +26,9 @@ const richMenuObject = {
         height: 843
       },
       action: {
-        type: "postback",
+        type: "uri",
         label: "ID発行",
-        data: "generate_id",
-        displayText: "IDを発行してください" // ユーザーの画面に表示されるテキスト
+        uri: "https://access.line.me/oauth2/v2.1/authorize?response_type=code&client_id=2007461916&redirect_uri=https%3A%2F%2Fasia-northeast1-nesugoshipanic.cloudfunctions.net%2Fapp%2Fline-login-callback&state=issue_id&scope=openid%20profile%20email"
       }
     },    {
       bounds: {
