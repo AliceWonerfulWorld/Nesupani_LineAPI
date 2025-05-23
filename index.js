@@ -382,7 +382,7 @@ app.post('/api/stage2-completed', async (req, res) => {
       stage: 3,
       stage3Completed: false,
       score: 0,
-      status: 'active'
+      status: 'stage2'
     });
       // ユーザーにSTAGE3用のIDと案内を送信
     await client.pushMessage(lineUserId, [
@@ -543,7 +543,7 @@ app.get('/api/generate-stage3-id/:originalGameId', async (req, res) => {
       stage: 3,
       stage3Completed: false,
       score: 0,
-      status: 'active'
+      status: 'stage2'
     });
     
     // 成功レスポンスを返す
@@ -560,7 +560,47 @@ app.get('/api/generate-stage3-id/:originalGameId', async (req, res) => {
   }
 });
 
-// ランダムID生成関数はhandleEvent.jsに移動しました
+
+// --- LINE Loginコールバックエンドポイント追加 ---
+const axios = require('axios');
+const jwt = require('jsonwebtoken');
+
+app.get('/line-login-callback', async (req, res) => {
+  try {
+    const code = req.query.code;
+    if (!code) return res.status(400).send('codeがありません');
+
+    // LINEのトークンエンドポイントにPOSTしてid_token取得
+    const tokenRes = await axios.post('https://api.line.me/oauth2/v2.1/token', null, {
+      params: {
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: process.env.LINE_LOGIN_REDIRECT_URI,
+        client_id: process.env.LINE_LOGIN_CHANNEL_ID,
+        client_secret: process.env.LINE_LOGIN_CHANNEL_SECRET,
+      },
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+
+    const idToken = tokenRes.data.id_token;
+    if (!idToken) return res.status(400).send('id_tokenが取得できません');
+
+    // id_tokenをデコードしてメールアドレス・userId取得
+    const decoded = jwt.decode(idToken);
+    const email = decoded.email;
+    const lineUserId = decoded.sub;
+
+    if (!email || !lineUserId) return res.status(400).send('メールアドレスまたはuserIdが取得できません');
+
+    // Firestoreに保存
+    await db.collection('users').doc(lineUserId).set({ email }, { merge: true });
+
+    res.send('認証・メールアドレス取得が完了しました。画面を閉じてください。');
+  } catch (e) {
+    console.error(e);
+    res.status(500).send('エラーが発生しました');
+  }
+});
 
 const port = process.env.PORT || 3000;
 try {
