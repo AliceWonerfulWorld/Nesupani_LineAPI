@@ -9,6 +9,56 @@ const { handleEvent, generateRandomId } = require('./handleEvent');
 admin.initializeApp();
 const db = admin.firestore();
 
+const app = express();
+
+// --- CORS対応: すべてのAPIにCORSヘッダーを付与 ---
+app.use((req, res, next) => {
+  res.set('Access-Control-Allow-Origin', 'https://nesugoshipanic.web.app');
+  res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    return res.status(204).send('');
+  }
+  next();
+});
+
+// --- LINE通知API（Flutter用） ---
+app.post('/api/line-notify', async (req, res) => {
+  try {
+    const { userId, score, isGameOver } = req.body;
+    // ユーザー情報を取得
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: 'ユーザーが見つかりません' });
+    }
+    const userData = userDoc.data();
+    const lineUserId = userData.lineUserId;
+    if (!lineUserId) {
+      return res.status(400).json({ error: 'LINEユーザーIDが設定されていません' });
+    }
+    // メッセージの作成
+    let message;
+    if (isGameOver) {
+      message = {
+        type: 'text',
+        text: `ゲームオーバー！\n残念ながら、福工大前で降りることができませんでした。\nスコア: 0点\n\nもう一度チャレンジしてみましょう！`
+      };
+    } else {
+      message = {
+        type: 'text',
+        text: `おめでとうございます！\n福工大前で無事に降りることができました！\nスコア: ${score}点`
+      };
+    }
+    // LINE Messaging APIを使用してメッセージを送信
+    const client = new line.Client(config);
+    await client.pushMessage(lineUserId, message);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('LINE通知エラー:', error);
+    res.status(500).json({ error: 'LINE通知の送信に失敗しました' });
+  }
+});
+
 // LINE client configuration using Firebase Functions environment config (Gen1)
 // Set via: firebase functions:config:set line.channel_access_token="<TOKEN>" line.channel_secret="<SECRET>"
 const config = {
@@ -19,8 +69,7 @@ const config = {
 // Game URL setting
 const STAGE3_GAME_URL = 'https://nesugoshipanic.web.app/';
 
-// Create Express app
-const app = express();
+
 
 // JSON解析ミドルウェアを追加
 app.use(express.json({
