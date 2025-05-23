@@ -483,7 +483,21 @@ app.post('/api/stage3-completed', async (req, res) => {
         }
       ];
     }
-    await client.pushMessage(lineUserId, messages);
+
+    // --- ここから通知デバッグ用ログ追加 ---
+    console.log('[STAGE3通知] lineUserId:', lineUserId);
+    console.log('[STAGE3通知] messages:', JSON.stringify(messages, null, 2));
+    if (!lineUserId) {
+      console.error('[STAGE3通知] lineUserIdが取得できません');
+      return res.status(400).json({ success: false, message: 'lineUserIdが取得できません' });
+    }
+    try {
+      await client.pushMessage(lineUserId, messages);
+      console.log('[STAGE3通知] pushMessage送信成功');
+    } catch (pushErr) {
+      console.error('[STAGE3通知] pushMessage送信エラー:', pushErr);
+      return res.status(500).json({ success: false, message: 'LINE通知送信エラー', error: pushErr.message || pushErr });
+    }
 
     return res.json({ 
       success: true, 

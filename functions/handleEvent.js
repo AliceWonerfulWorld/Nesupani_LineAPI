@@ -155,29 +155,31 @@ async function handleEvent(event, db, admin, client) {
         });
       } else if (data === 'show_ranking') {
         try {
-          // 上位5名のスコアを取得
+          // 上位5名の合計スコアでランキングを取得
           const snapshot = await db.collection('gameIds')
-            .orderBy('score', 'desc')
+            .orderBy('totalScore', 'desc')
             .limit(5)
             .get();
-          
+
           if (snapshot.empty) {
             return client.replyMessage(event.replyToken, {
               type: 'text',
               text: 'まだランキングデータがありません。'
             });
           }
-          
+
           // ランキングテキストを構築
           let rankingText = "🏆 スコアランキング 🏆\n\n";
           let rank = 1;
-          
+
           snapshot.forEach(doc => {
             const data = doc.data();
-            rankingText += `${rank}位: ID ${data.gameId} - ${data.score}点\n`;
+            // totalScoreがなければscoreでフォールバック
+            const score = (typeof data.totalScore === 'number') ? data.totalScore : (data.score || 0);
+            rankingText += `${rank}位: ID ${data.gameId} - ${score}点\n`;
             rank++;
           });
-          
+
           return client.replyMessage(event.replyToken, {
             type: 'text',
             text: rankingText
@@ -232,28 +234,23 @@ async function handleEvent(event, db, admin, client) {
       // デバッグコマンド - STAGE3
       if (text.includes('デバッグ') && text.includes('STAGE3')) {
         const userId = event.source.userId;
-        
         try {
           // ユーザーの最後に生成したゲームIDを検索
           const userDoc = await db.collection('users').doc(userId).get();
-          
           if (!userDoc.exists) {
             return client.replyMessage(event.replyToken, {
               type: 'text',
               text: 'ユーザー情報が見つかりません。先にメニューからIDを発行してください。'
             });
           }
-          
           const userData = userDoc.data();
           const lastGameId = userData.lastGeneratedGameId;
-          
           if (!lastGameId) {
             return client.replyMessage(event.replyToken, {
               type: 'text',
               text: 'ゲームIDが見つかりません。メニューからIDを発行してください。'
             });
           }
-          
           // 擬似的にSTAGE1&2をクリア済みとしてマーク
           await db.collection('gameIds').doc(lastGameId).update({
             stage1Completed: true,
@@ -263,11 +260,9 @@ async function handleEvent(event, db, admin, client) {
             score: 1250,
             updatedAt: admin.firestore.FieldValue.serverTimestamp()
           });
-          
           // STAGE3用の新しいIDを生成
           let stage3Id = generateRandomId();
           let isUnique = false;
-          
           while (!isUnique) {
             const idCheck = await db.collection('gameIds').doc(stage3Id).get();
             if (!idCheck.exists) {
@@ -275,7 +270,8 @@ async function handleEvent(event, db, admin, client) {
             } else {
               stage3Id = generateRandomId();
             }
-          }          // STAGE3用のIDをFirestoreに保存
+          }
+          // STAGE3用のIDをFirestoreに保存
           await db.collection('gameIds').doc(stage3Id).set({
             lineUserId: userId,
             originalGameId: lastGameId,
@@ -286,26 +282,48 @@ async function handleEvent(event, db, admin, client) {
             score: 0,
             status: 'stage2'
           });
-            
+
+          // メール送信処理
+          let email = null;
+          if (userData.email) {
+            email = userData.email;
+          }
+          let mailSendResult = '';
+          const functions = require('firebase-functions');
+          const gmailConfig = functions.config().gmail || {};
+          if (gmailConfig.user && gmailConfig.pass && email) {
+            try {
+              const stage3Url = `https://nesugoshipanic.web.app/?id=${stage3Id}`;
+              const nodemailer = require('nodemailer');
+              const transporter = nodemailer.createTransport({
+                service: 'gmail',
+                auth: {
+                  user: gmailConfig.user,
+                  pass: gmailConfig.pass
+                }
+              });
+              await transporter.sendMail({
+                from: `寝過ごしパニック運営事務局 <${gmailConfig.user}>`,
+                to: email,
+                subject: '【寝過ごしパニック】STAGE3ゲームURLのご案内（デバッグコマンド発行）',
+                text: `このメールはデバッグ用コマンドでSTAGE3 IDを発行したため自動送信しています。\n\nSTAGE3のゲームURLはこちらです:\n${stage3Url}\n\nあなた専用のID: ${stage3Id}\n\n※このメールが迷惑メールに振り分けられた場合は、「迷惑メールでない」と設定してください。\nご不明な点があればLINE公式アカウントまでご連絡ください。`,
+                html: `<p>このメールはデバッグ用コマンドでSTAGE3 IDを発行したため自動送信しています。</p><p>STAGE3のゲームURLはこちらです：<br><a href="${stage3Url}">${stage3Url}</a></p><p>あなた専用のID: <b>${stage3Id}</b></p><p>※このメールが迷惑メールに振り分けられた場合は、「迷惑メールでない」と設定してください。<br>ご不明な点があればLINE公式アカウントまでご連絡ください。</p>`
+              });
+              mailSendResult = 'メール送信成功';
+            } catch (mailErr) {
+              console.error('STAGE3デバッグメール送信エラー:', mailErr);
+              mailSendResult = 'メール送信失敗: ' + (mailErr.message || mailErr);
+            }
+          } else if (!email) {
+            mailSendResult = 'メールアドレスが登録されていません';
+          } else {
+            mailSendResult = 'メール送信設定が未構成です';
+          }
+
           return client.replyMessage(event.replyToken, [
             {
               type: 'text',
-              text: `🔧 デバッグモード: STAGE3テスト 🔧\n\nSTAGE1&2を完了済みとしてマークしました。\nSTAGE1&2の仮スコア: 1250点\n\nSTAGE3用のIDは「${stage3Id}」です。下のボタンからSTAGE3を開いてください。`
-            },
-            {
-              type: 'template',
-              altText: 'STAGE3へ進む',
-              template: {
-                type: 'buttons',
-                text: 'ボタンを押すと外部ブラウザでSTAGE3が開きます',
-                actions: [
-                  {
-                    type: 'uri',
-                    label: 'STAGE3へ進む',
-                    uri: `https://nesugoshipanic.web.app/?id=${stage3Id}`
-                  }
-                ]
-              }
+              text: `🔧 デバッグモード: STAGE3テスト 🔧\n\nSTAGE1&2を完了済みとしてマークしました。\nSTAGE1&2の仮スコア: 1250点\n\nSTAGE3用のIDは「${stage3Id}」です。\n\nSTAGE3のゲームURLはご登録のメールアドレスに送信しました。\n\n【メール送信結果】${mailSendResult}`
             }
           ]);
         } catch (error) {
