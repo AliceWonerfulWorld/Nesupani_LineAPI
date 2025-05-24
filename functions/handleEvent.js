@@ -47,21 +47,89 @@ async function handleEvent(event, db, admin, client) {
           + '&redirect_uri=' + encodeURIComponent(redirectUrl)
           + '&state=issue_id'
           + '&scope=openid%20profile%20email';
-        return client.replyMessage(event.replyToken, {
-          type: 'template',
+
+        const flexMessage = {
+          type: 'flex',
           altText: 'ID発行にはLINEログイン認証が必要です',
-          template: {
-            type: 'buttons',
-            text: 'ID発行にはLINEログイン認証が必要です。下のボタンから認証を行ってください。',
-            actions: [
-              {
-                type: 'uri',
-                label: 'LINEログイン認証へ',
-                uri: lineLoginUrl
-              }
-            ]
+          contents: {
+            type: 'bubble',
+            hero: {
+              type: 'image',
+              url: 'https://asia-northeast1-nesugoshipanic.cloudfunctions.net/app/RitAlice.jpg',
+              size: 'full',
+              aspectRatio: '16:11',
+              aspectMode: 'cover',
+            },
+            body: {
+              type: 'box',
+              layout: 'vertical',
+              contents: [
+                {
+                  type: 'text',
+                  text: '学校へ急げ！！',
+                  weight: 'bold',
+                  size: 'xl',
+                  color: '#1DB446',
+                  align: 'center',
+                  margin: 'md',
+                },
+                {
+                  type: 'text',
+                  text: 'LINEログイン認証で、あなた専用のゲームIDを発行します。\n認証後、ゲームURLもメールでご案内！',
+                  wrap: true,
+                  size: 'md',
+                  color: '#333333',
+                  margin: 'md',
+                },
+                {
+                  type: 'box',
+                  layout: 'baseline',
+                  margin: 'md',
+                  contents: [
+                    {
+                      type: 'icon',
+                      url: 'https://scdn.line-apps.com/n/channel_devcenter/img/fx/01_1_cafe.png',
+                      size: 'sm'
+                    },
+                    {
+                      type: 'text',
+                      text: '寝過ごしパニック！',
+                      size: 'xs',
+                      color: '#aaaaaa',
+                      margin: 'sm'
+                    }
+                  ]
+                }
+              ]
+            },
+            footer: {
+              type: 'box',
+              layout: 'vertical',
+              spacing: 'sm',
+              contents: [
+                {
+                  type: 'button',
+                  style: 'primary',
+                  color: '#1DB446',
+                  action: {
+                    type: 'uri',
+                    label: 'LINEログイン認証へ',
+                    uri: lineLoginUrl
+                  }
+                },
+                {
+                  type: 'text',
+                  text: '認証後、あなた専用のIDとURLをメールでご案内します',
+                  size: 'xxs',
+                  color: '#aaaaaa',
+                  align: 'center',
+                  margin: 'md'
+                }
+              ]
+            }
           }
-        });
+        };
+        return client.replyMessage(event.replyToken, flexMessage);
       } else if (data === 'check_score') {
         // スコア確認の処理（今後実装）
         return client.replyMessage(event.replyToken, {
@@ -175,6 +243,134 @@ async function handleEvent(event, db, admin, client) {
         };
         return client.replyMessage(event.replyToken, flexMessage);
       }
+
+      // 「リタ猫」隠しコマンド
+      if (text.trim() === 'リタ猫') {
+        const flexMessage = {
+          type: 'flex',
+          altText: '🐱 リタ猫 🐱 キャラクター紹介',
+          contents: {
+            type: 'bubble',
+            hero: {
+              type: 'image',
+              url: 'https://asia-northeast1-nesugoshipanic.cloudfunctions.net/app/Litacat.png',
+              size: 'full',
+              aspectRatio: '16:11',
+              aspectMode: 'cover',
+            },
+            body: {
+              type: 'box',
+              layout: 'vertical',
+              contents: [
+                {
+                  type: 'text',
+                  text: '🐱 リタ猫 🐱',
+                  weight: 'bold',
+                  size: 'xl',
+                  color: '#00BFFF',
+                  align: 'center',
+                  margin: 'md',
+                },
+                {
+                  type: 'text',
+                  text: 'じょぎの準マスコットキャラクター \n元副部長リタのモチーフキャラクターであり、お腹のぐるぐる模様が特徴。',
+                  wrap: true,
+                  size: 'md',
+                  color: '#333333',
+                  margin: 'md',
+                },
+                {
+                  type: 'text',
+                  text: '実はここだけの話、リタ猫の派生キャラクターが結構いるらしい。\n見かけたらめちゃくちゃレアなので写真に収めておこう。',
+                  wrap: true,
+                  size: 'sm',
+                  color: '#666666',
+                  margin: 'md',
+                }
+              ]
+            },
+            footer: {
+              type: 'box',
+              layout: 'vertical',
+              contents: [
+                {
+                  type: 'text',
+                  text: 'リタのひみつキャラクター',
+                  size: 'xs',
+                  color: '#aaaaaa',
+                  align: 'center',
+                }
+              ]
+            }
+          }
+        };
+        return client.replyMessage(event.replyToken, flexMessage);
+      }
+
+      // 「ヤッピー」隠しコマンド
+      if (text.trim() === 'ヤッピー') {
+        const flexMessage = {
+          type: 'flex',
+          altText: '🐲 ？？？ 🐲 キャラクター紹介',
+          contents: {
+            type: 'bubble',
+            hero: {
+              type: 'image',
+              url: 'https://asia-northeast1-nesugoshipanic.cloudfunctions.net/app/yappi.png',
+              size: 'full',
+              aspectRatio: '16:11',
+              aspectMode: 'cover',
+            },
+            body: {
+              type: 'box',
+              layout: 'vertical',
+              contents: [
+                {
+                  type: 'text',
+                  text: '🐲 ？？？ 🐲',
+                  weight: 'bold',
+                  size: 'xl',
+                  color: '#00C853',
+                  align: 'center',
+                  margin: 'md',
+                },
+                {
+                  type: 'text',
+                  text: '現部長とばくろがAI画像生成で遊んでいた際に、柳井が生み出したキャラクター \n 本人曰くまだ名前はないらしいが、一部の人からは「ヤッピー」と呼ばれている。',
+                  wrap: true,
+                  size: 'md',
+                  color: '#333333',
+                  margin: 'md',
+                },
+                {
+                  type: 'text',
+                  text: 'ドラゴンのような見た目をしているため恐れられがちだが、優しい。\nブチ切れると炎を吐いて攻撃してくるので注意しよう。',
+                  wrap: true,
+                  size: 'sm',
+                  color: '#666666',
+                  margin: 'md',
+                }
+              ]
+            },
+            footer: {
+              type: 'box',
+              layout: 'vertical',
+              contents: [
+                {
+                  type: 'text',
+                  text: '柳井のひみつキャラクター',
+                  size: 'xs',
+                  color: '#aaaaaa',
+                  align: 'center',
+                }
+              ]
+            }
+          }
+        };
+        return client.replyMessage(event.replyToken, flexMessage);
+      }
+
+
       // 「ゲーム」「プレイ」などの単語に反応
       if (text.includes('ゲーム') || text.includes('プレイ') || text.includes('遊ぶ')) {
         return client.replyMessage(event.replyToken, {
