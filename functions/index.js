@@ -805,7 +805,7 @@ app.get('/line-login-callback', async (req, res) => {
     if (!lineUserId) return res.status(400).send('userIdが取得できません');
 
     // Firestoreに保存
-    await db.collection('users').doc(lineUserId).set({ email }, { merge: true });
+    await db.collection('users').doc(lineUserId).set({ email, lineUserId }, { merge: true });
 
     // --- ここからメール送信処理 ---
     // nodemailerでGmail経由でメール送信（functions.config().gmail から設定取得）
@@ -822,32 +822,35 @@ app.get('/line-login-callback', async (req, res) => {
           .where('stage', '==', 1)
           .limit(1)
           .get();
-        if (!gameIdSnap.empty) {
-          gameId = gameIdSnap.docs[0].id;
-        } else {
-          // 新規発行
-          let newId = generateRandomId();
-          let isUnique = false;
-          while (!isUnique) {
-            const idCheck = await db.collection('gameIds').doc(newId).get();
-            if (!idCheck.exists) {
-              isUnique = true;
-            } else {
-              newId = generateRandomId();
-            }
+        // 毎回新しいIDを発行（同じアカウントでも重複しない）
+        let newId = generateRandomId();
+        let isUnique = false;
+        while (!isUnique) {
+          const idCheck = await db.collection('gameIds').doc(newId).get();
+          if (!idCheck.exists) {
+            isUnique = true;
+          } else {
+            newId = generateRandomId();
           }
-          await db.collection('gameIds').doc(newId).set({
-            lineUserId: lineUserId,
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            gameId: newId,
-            stage: 1,
-            status: 'new',
-            score: 0
-          });
-          gameId = newId;
         }
+        await db.collection('gameIds').doc(newId).set({
+          lineUserId: lineUserId,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          gameId: newId,
+          stage: 1,
+          status: 'active',
+          score: 0,
+          stage1Completed: false,
+          stage2Completed: false,
+          stage3Completed: false,
+          stage1Score: 0,
+          stage2Score: 0,
+          stage3Score: 0
+        });
+        gameId = newId;
         // STAGE1のURLにgameIdをクエリパラメータで付与
-        const stage1Url = `https://nesupani-react.vercel.app/bikegame?id=${gameId}`;
+        const stage1Url = `https://nesupani-react.vercel.app/?id=${gameId}`;
         const transporter = nodemailer.createTransport({
           service: 'gmail',
           auth: {

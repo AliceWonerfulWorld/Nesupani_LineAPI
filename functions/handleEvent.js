@@ -32,121 +32,36 @@ async function handleEvent(event, db, admin, client) {
       const data = event.postback.data;
       
       if (data === 'generate_id') {
-        // ユーザーIDを取得
-        const userId = event.source.userId;
-        console.log(`Generating ID for user: ${userId}`);
-
-        // ランダムIDを生成
-        let randomId = generateRandomId();
-        let isUnique = false;
-
-        // IDの一意性を確保するためのループ
-        while (!isUnique) {
-          // 既存IDと衝突していないか確認
-          const idCheck = await db.collection('gameIds').doc(randomId).get();
-          if (!idCheck.exists) {
-            isUnique = true;
-          } else {
-            // 衝突した場合は別のIDを生成
-            randomId = generateRandomId();
-          }
-        }
-
-        try {
-          // FirestoreにデータをIDをキーにして保存
-          await db.collection('gameIds').doc(randomId).set({
-            lineUserId: userId,
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            gameId: randomId,
-            stage1Completed: false,
-            stage2Completed: false,
-            stage3Completed: false,
-            score: 0,
-            status: 'stage2'
+        // LINEログイン認証用URLを返す（環境変数がなければエラー）
+        const channelId = process.env.LINE_LOGIN_CHANNEL_ID;
+        const redirectUrl = process.env.LINE_LOGIN_REDIRECT_URL;
+        if (!channelId || !redirectUrl) {
+          return client.replyMessage(event.replyToken, {
+            type: 'text',
+            text: 'LINEログイン認証の設定が不足しています。管理者にご連絡ください。'
           });
-
-          // ユーザー情報も更新/作成
-          await db.collection('users').doc(userId).set({
-            lastActivity: admin.firestore.FieldValue.serverTimestamp(),
-            lastGeneratedGameId: randomId
-          }, { merge: true });
-
-          // メール送信処理
-          // nodemailerのセットアップ
-          let nodemailer;
-          try {
-            nodemailer = require('nodemailer');
-          } catch (e) {
-            console.error('nodemailerがインストールされていません。npm install nodemailer を実行してください。');
-            nodemailer = null;
-          }
-
-          // Firestore usersコレクションからメールアドレス取得
-          let email = null;
-          try {
-            const userDoc = await db.collection('users').doc(userId).get();
-            if (userDoc.exists && userDoc.data().email) {
-              email = userDoc.data().email;
-            }
-          } catch (e) {
-            console.error('メールアドレス取得エラー:', e);
-          }
-
-          // デバッグ用ログ
-          console.log('[DEBUG] nodemailer:', nodemailer ? 'OK' : 'NG', 'email:', email);
-          // メールアドレスが存在し、nodemailerが使える場合のみ送信
-          if (email && nodemailer) {
-            // SMTP設定（.envやfunctions.config()から取得してください）
-            const smtpHost = process.env.SMTP_HOST || functions.config().smtp?.host;
-            const smtpPort = process.env.SMTP_PORT || functions.config().smtp?.port || 465;
-            const smtpUser = process.env.SMTP_USER || functions.config().smtp?.user;
-            const smtpPass = process.env.SMTP_PASS || functions.config().smtp?.pass;
-
-            if (smtpHost && smtpUser && smtpPass) {
-              const transporter = nodemailer.createTransport({
-                host: smtpHost,
-                port: smtpPort,
-                secure: true,
-                auth: {
-                  user: smtpUser,
-                  pass: smtpPass
-                }
-              });
-
-              // STAGE1のURLを生成
-              const stage1Url = `https://nesugoshipanic.web.app/?id=${randomId}`;
-              const mailOptions = {
-                from: smtpUser,
-                to: email,
-                subject: '【寝過ごしパニック】ゲームID発行とSTAGE1開始URL',
-                text: `あなたのゲームIDは「${randomId}」です。\n\n下記URLからSTAGE1を開始できます:\n${stage1Url}\n\nこのメールは自動送信です。`
-              };
-              try {
-                await transporter.sendMail(mailOptions);
-                console.log(`メール送信成功: ${email}`);
-              } catch (mailErr) {
-                console.error('メール送信エラー:', mailErr);
+        }
+        const lineLoginUrl =
+          'https://access.line.me/oauth2/v2.1/authorize?response_type=code'
+          + '&client_id=' + encodeURIComponent(channelId)
+          + '&redirect_uri=' + encodeURIComponent(redirectUrl)
+          + '&state=issue_id'
+          + '&scope=openid%20profile%20email';
+        return client.replyMessage(event.replyToken, {
+          type: 'template',
+          altText: 'ID発行にはLINEログイン認証が必要です',
+          template: {
+            type: 'buttons',
+            text: 'ID発行にはLINEログイン認証が必要です。下のボタンから認証を行ってください。',
+            actions: [
+              {
+                type: 'uri',
+                label: 'LINEログイン認証へ',
+                uri: lineLoginUrl
               }
-            } else {
-              console.error('SMTP設定が不足しています。');
-            }
-          } else if (!email) {
-            console.log('メールアドレスがFirestoreに登録されていません。');
+            ]
           }
-
-          console.log(`ID生成成功: ${randomId} (LINE ID: ${userId})`);
-
-          return client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: `あなたのゲームIDは「${randomId}」です！\nこのIDをゲーム内で入力してプレイしてください。${email ? '\nご登録のメールアドレスにもSTAGE1のURLを送信しました。' : '\nメールアドレスが未登録のためメール送信は行われませんでした。'}`,
-          });
-        } catch (error) {
-          console.error('Firestore保存エラー:', error);
-          return client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: 'IDの発行中にエラーが発生しました。もう一度お試しください。',
-          });
-        }
+        });
       } else if (data === 'check_score') {
         // スコア確認の処理（今後実装）
         return client.replyMessage(event.replyToken, {
@@ -198,6 +113,68 @@ async function handleEvent(event, db, admin, client) {
     if (event.type === 'message' && event.message.type === 'text') {
       const text = event.message.text;
       
+      // 「ちんかに」隠しコマンド
+      if (text.trim() === 'ちんかに') {
+        const flexMessage = {
+          type: 'flex',
+          altText: '🦀ちんかに🦀 キャラクター紹介',
+          contents: {
+            type: 'bubble',
+            hero: {
+              type: 'image',
+              url: 'https://asia-northeast1-nesugoshipanic.cloudfunctions.net/app/chinkani.png',
+              size: 'full',
+              aspectRatio: '16:11',
+              aspectMode: 'cover',
+            },
+            body: {
+              type: 'box',
+              layout: 'vertical',
+              contents: [
+                {
+                  type: 'text',
+                  text: '🦀 ちんかに 🦀',
+                  weight: 'bold',
+                  size: 'xl',
+                  color: '#e91e63',
+                  align: 'center',
+                  margin: 'md',
+                },
+                {
+                  type: 'text',
+                  text: 'ちんあなごに寄生されたカニ。\n自分のモチーフキャラクターが欲しいと思っていたKOUの切なる願いから誕生したキャラクターである。',
+                  wrap: true,
+                  size: 'md',
+                  color: '#333333',
+                  margin: 'md',
+                },
+                {
+                  type: 'text',
+                  text: '本体はちんあなごであり、寄生する生物によって語尾も変わる。\nちなみにしっぽはドリルになっているため、かなり危険である。',
+                  wrap: true,
+                  size: 'sm',
+                  color: '#666666',
+                  margin: 'md',
+                }
+              ]
+            },
+            footer: {
+              type: 'box',
+              layout: 'vertical',
+              contents: [
+                {
+                  type: 'text',
+                  text: 'KOUのひみつキャラクター',
+                  size: 'xs',
+                  color: '#aaaaaa',
+                  align: 'center',
+                }
+              ]
+            }
+          }
+        };
+        return client.replyMessage(event.replyToken, flexMessage);
+      }
       // 「ゲーム」「プレイ」などの単語に反応
       if (text.includes('ゲーム') || text.includes('プレイ') || text.includes('遊ぶ')) {
         return client.replyMessage(event.replyToken, {
@@ -216,11 +193,14 @@ async function handleEvent(event, db, admin, client) {
             data: 'show_ranking'
           }
         };
-        return handleEvent(rankingEvent);
+        return handleEvent(rankingEvent, db, admin, client);
       }
-        // 「ID」という単語に反応
-      if (text.includes('ID') || text.includes('id') || text.includes('Id')) {
-        // ID発行のポストバックデータを模倣
+
+      // 「ID発行」や「IDを発行」などにも反応
+      if (
+        (text.includes('ID') || text.includes('id') || text.includes('Id')) &&
+        text.includes('発行')
+      ) {
         const idEvent = {
           ...event,
           type: 'postback',
@@ -228,7 +208,7 @@ async function handleEvent(event, db, admin, client) {
             data: 'generate_id'
           }
         };
-        return handleEvent(idEvent);
+        return handleEvent(idEvent, db, admin, client);
       }
       
       // デバッグコマンド - STAGE3
@@ -282,6 +262,12 @@ async function handleEvent(event, db, admin, client) {
             score: 0,
             status: 'stage2'
           });
+          // ユーザー情報も更新/作成（lineUserIdを必ずセット）
+          await db.collection('users').doc(userId).set({
+            lastActivity: admin.firestore.FieldValue.serverTimestamp(),
+            lastGeneratedGameId: stage3Id,
+            lineUserId: userId
+          }, { merge: true });
 
           // メール送信処理
           let email = null;
