@@ -55,7 +55,7 @@ if (require.main === module) {
       console.log('リッチメニューを作成中...');
       const richMenuId = await client.createRichMenu(richMenu);
       console.log(`リッチメニュー作成完了: ${richMenuId}`);
-      const imagePath = path.join(__dirname, '../rich-menu-image.png');
+      const imagePath = path.join(__dirname, '../rich-menu-image1.png');
       console.log(`画像パス: ${imagePath}`);
       if (!fs.existsSync(imagePath)) {
         console.error(`エラー: 画像ファイルが見つかりません: ${imagePath}`);

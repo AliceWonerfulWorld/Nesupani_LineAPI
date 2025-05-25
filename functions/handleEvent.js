@@ -138,8 +138,8 @@ async function handleEvent(event, db, admin, client) {
         });
       } else if (data === 'show_ranking') {
         try {
-          // 上位5名の合計スコアでランキングを取得
           const snapshot = await db.collection('gameIds')
+            .where('stage3Completed', '==', true) // stage3Completedがtrueのユーザーのみを対象
             .orderBy('totalScore', 'desc')
             .limit(5)
             .get();
@@ -147,25 +147,122 @@ async function handleEvent(event, db, admin, client) {
           if (snapshot.empty) {
             return client.replyMessage(event.replyToken, {
               type: 'text',
-              text: 'まだランキングデータがありません。'
+              text: 'まだランキングデータがありません。STAGE3をクリアしてランキングに載ろう！'
             });
           }
 
-          // ランキングテキストを構築
-          let rankingText = "🏆 スコアランキング 🏆\n\n";
+          const rankingBubbles = [];
           let rank = 1;
 
-          snapshot.forEach(doc => {
+          for (const doc of snapshot.docs) {
             const data = doc.data();
-            // totalScoreがなければscoreでフォールバック
-            const score = (typeof data.totalScore === 'number') ? data.totalScore : (data.score || 0);
-            rankingText += `${rank}位: ID ${data.gameId} - ${score}点\n`;
+            const userId = data.lineUserId; // LINEユーザーIDを取得
+            let userProfile = { displayName: 'プレイヤー', pictureUrl: 'https://scdn.line-apps.com/n/channel_devcenter/img/fx/01_1_cafe.png' }; // デフォルト
+
+            if (userId) {
+              try {
+                userProfile = await client.getProfile(userId);
+              } catch (err) {
+                console.error(`LINEユーザープロフィールの取得に失敗しました (ID: ${userId}):`, err);
+                // プロフィール取得に失敗してもデフォルト値で続行
+              }
+            }
+            
+            const displayName = data.nickname || userProfile.displayName || `ID ${data.gameId}`;
+            const profilePictureUrl = userProfile.pictureUrl || 'https://scdn.line-apps.com/n/channel_devcenter/img/fx/01_1_cafe.png'; // デフォルト画像
+
+            rankingBubbles.push({
+              type: 'bubble',
+              hero: {
+                type: 'image',
+                url: profilePictureUrl,
+                size: 'full',
+                aspectRatio: '20:13',
+                aspectMode: 'cover',
+                action: { type: 'uri', uri: 'https://line.me/ti/p/@OFxguYv' } // ボットのプロフィールページなど
+              },
+              body: {
+                type: 'box',
+                layout: 'vertical',
+                contents: [
+                  {
+                    type: 'text',
+                    text: `${rank}位: ${displayName}`,
+                    weight: 'bold',
+                    size: 'xl',
+                    margin: 'md'
+                  },
+                  {
+                    type: 'box',
+                    layout: 'vertical',
+                    margin: 'lg',
+                    spacing: 'sm',
+                    contents: [
+                      {
+                        type: 'box',
+                        layout: 'baseline',
+                        spacing: 'sm',
+                        contents: [
+                          { type: 'text', text: '総合スコア', color: '#aaaaaa', size: 'sm', flex: 4 },
+                          { type: 'text', text: `${data.totalScore || 0} 点`, color: '#666666', size: 'sm', flex: 5, weight: 'bold', align: 'end' }
+                        ]
+                      },
+                      {
+                        type: 'box',
+                        layout: 'baseline',
+                        spacing: 'sm',
+                        contents: [
+                          { type: 'text', text: 'STAGE1', color: '#aaaaaa', size: 'xs', flex: 4 },
+                          { type: 'text', text: `${data.stage1Score || 0} 点`, color: '#666666', size: 'xs', flex: 5, align: 'end' }
+                        ]
+                      },
+                      {
+                        type: 'box',
+                        layout: 'baseline',
+                        spacing: 'sm',
+                        contents: [
+                          { type: 'text', text: 'STAGE2', color: '#aaaaaa', size: 'xs', flex: 4 },
+                          { type: 'text', text: `${data.stage2Score || 0} 点`, color: '#666666', size: 'xs', flex: 5, align: 'end' }
+                        ]
+                      },
+                      {
+                        type: 'box',
+                        layout: 'baseline',
+                        spacing: 'sm',
+                        contents: [
+                          { type: 'text', text: 'STAGE3', color: '#aaaaaa', size: 'xs', flex: 4 },
+                          { type: 'text', text: `${data.stage3Score || 0} 点`, color: '#666666', size: 'xs', flex: 5, align: 'end' }
+                        ]
+                      }
+                    ]
+                  }
+                ]
+              },
+              footer: {
+                type: 'box',
+                layout: 'vertical',
+                spacing: 'sm',
+                contents: [
+                  {
+                    type: 'button',
+                    style: 'link',
+                    height: 'sm',
+                    action: { type: 'uri', label: 'ゲームをプレイ', uri: 'https://liff.line.me/YOUR_LIFF_ID' } // ゲームのLIFF URLなど
+                  }
+                ],
+                flex: 0
+              }
+            });
             rank++;
-          });
+          }
 
           return client.replyMessage(event.replyToken, {
-            type: 'text',
-            text: rankingText
+            type: 'flex',
+            altText: '🏆 スコアランキング 🏆',
+            contents: {
+              type: 'carousel',
+              contents: rankingBubbles
+            }
           });
         } catch (error) {
           console.error('ランキング取得エラー:', error);

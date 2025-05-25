@@ -26,11 +26,13 @@ const richMenuObject = {
         height: 843
       },
       action: {
-        type: "uri",
+        type: "postback",
         label: "ID発行",
-        uri: "https://access.line.me/oauth2/v2.1/authorize?response_type=code&client_id=2007461916&redirect_uri=https%3A%2F%2Fasia-northeast1-nesugoshipanic.cloudfunctions.net%2Fapp%2Fline-login-callback&state=issue_id&scope=openid%20profile%20email"
+        data: "generate_id",
+        displayText: "IDを発行してください" // ユーザーの画面に表示されるテキスト
       }
-    },    {
+    },
+    {
       bounds: {
         x: 833,
         y: 0,
@@ -38,9 +40,10 @@ const richMenuObject = {
         height: 843
       },
       action: {
-        type: "uri",
-        label: "ゲームを遊ぶ",
-        uri: "https://nesupani-react.vercel.app/"
+        type: "postback",
+        label: "スコア確認",
+        data: "check_score",
+        displayText: "スコアを確認したい"
       }
     },
     {
@@ -89,7 +92,8 @@ async function createRichMenu() {
 }
 
 // メイン処理
-createRichMenu()  .then(richMenuId => {
+createRichMenu()
+  .then(richMenuId => {
     console.log('リッチメニューの作成が完了しました。');
     console.log(`リッチメニューID: ${richMenuId}`);
   })
