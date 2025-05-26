@@ -1,13 +1,79 @@
+// .envからLINEチャネルアクセストークンを読み込む
+require('dotenv').config();
+const config = {
+  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN
+};
+
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const line = require('@line/bot-sdk');
 const fs = require('fs');
 const path = require('path');
 
-// 環境変数設定
-const config = {
-  channelAccessToken: functions.config().line.channel_access_token,
-};
+// --- 直接実行用 ---
+if (require.main === module) {
+  (async () => {
+    try {
+      const client = new line.Client(config);
+      const richMenu = {
+        size: {
+          width: 2500,
+          height: 843
+        },
+        selected: true,
+        name: "ゲームメニュー",
+        chatBarText: "メニューを開く",
+        areas: [
+          {
+            bounds: { x: 0, y: 0, width: 833, height: 843 },
+            action: {
+              type: "postback",
+              label: "ID発行",
+              data: "generate_id",
+              displayText: "IDを発行してください"
+            }
+          },
+          {
+            bounds: { x: 833, y: 0, width: 833, height: 843 },
+            action: {
+              type: "uri",
+              label: "ゲームを遊ぶ",
+              uri: "https://jyogi.pages.dev/"
+            }
+          },
+          {
+            bounds: { x: 1666, y: 0, width: 834, height: 843 },
+            action: {
+              type: "postback",
+              label: "ランキング",
+              data: "show_ranking",
+              displayText: "ランキングを見たい"
+            }
+          }
+        ]
+      };
+      console.log('リッチメニューを作成中...');
+      const richMenuId = await client.createRichMenu(richMenu);
+      console.log(`リッチメニュー作成完了: ${richMenuId}`);
+      const imagePath = path.join(__dirname, '../rich-menu-image1.png');
+      console.log(`画像パス: ${imagePath}`);
+      if (!fs.existsSync(imagePath)) {
+        console.error(`エラー: 画像ファイルが見つかりません: ${imagePath}`);
+        return;
+      }
+      console.log('リッチメニュー画像をアップロード中...');
+      const buffer = fs.readFileSync(imagePath);
+      await client.setRichMenuImage(richMenuId, buffer);
+      console.log('リッチメニュー画像のアップロード完了');
+      console.log('デフォルトリッチメニューとして設定中...');
+      await client.setDefaultRichMenu(richMenuId);
+      console.log('デフォルトリッチメニュー設定完了');
+      console.log(`リッチメニューの設定が完了しました。ID: ${richMenuId}`);
+    } catch (error) {
+      console.error('リッチメニュー作成エラー:', error);
+    }
+  })();
+}
 
 // リッチメニューセットアップ用のHTTPエンドポイント
 exports.setupRichMenu = functions.https.onRequest(async (req, res) => {
@@ -47,7 +113,7 @@ exports.setupRichMenu = functions.https.onRequest(async (req, res) => {
           action: {
             type: "uri",
             label: "ゲームを遊ぶ",
-            uri: "https://nesupani-react.vercel.app/"
+            uri: "https://jyogi.pages.dev/"
           }
         },
         {

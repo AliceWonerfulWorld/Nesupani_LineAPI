@@ -9,6 +9,56 @@ const { handleEvent, generateRandomId } = require('./handleEvent');
 admin.initializeApp();
 const db = admin.firestore();
 
+const app = express();
+
+// --- CORS対応: すべてのAPIにCORSヘッダーを付与 ---
+app.use((req, res, next) => {
+  res.set('Access-Control-Allow-Origin', 'https://nesugoshipanic.web.app');
+  res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    return res.status(204).send('');
+  }
+  next();
+});
+
+// --- LINE通知API（Flutter用） ---
+app.post('/api/line-notify', async (req, res) => {
+  try {
+    const { userId, score, isGameOver } = req.body;
+    // ユーザー情報を取得
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists) {
+      return res.status(404).json({ error: 'ユーザーが見つかりません' });
+    }
+    const userData = userDoc.data();
+    const lineUserId = userData.lineUserId;
+    if (!lineUserId) {
+      return res.status(400).json({ error: 'LINEユーザーIDが設定されていません' });
+    }
+    // メッセージの作成
+    let message;
+    if (isGameOver) {
+      message = {
+        type: 'text',
+        text: `ゲームオーバー！\n残念ながら、福工大前で降りることができませんでした。\nスコア: 0点\n\nもう一度チャレンジしてみましょう！`
+      };
+    } else {
+      message = {
+        type: 'text',
+        text: `おめでとうございます！\n福工大前で無事に降りることができました！\nスコア: ${score}点`
+      };
+    }
+    // LINE Messaging APIを使用してメッセージを送信
+    const client = new line.Client(config);
+    await client.pushMessage(lineUserId, message);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('LINE通知エラー:', error);
+    res.status(500).json({ error: 'LINE通知の送信に失敗しました' });
+  }
+});
+
 // LINE client configuration using Firebase Functions environment config (Gen1)
 // Set via: firebase functions:config:set line.channel_access_token="<TOKEN>" line.channel_secret="<SECRET>"
 const config = {
@@ -19,8 +69,7 @@ const config = {
 // Game URL setting
 const STAGE3_GAME_URL = 'https://nesugoshipanic.web.app/';
 
-// Create Express app
-const app = express();
+
 
 // JSON解析ミドルウェアを追加
 app.use(express.json({
@@ -289,14 +338,16 @@ app.post('/api/stage2-completed', async (req, res) => {
     
     const userData = gameDoc.data();
     const lineUserId = userData.lineUserId;
-    
+    const stage1Score = userData.stage1Score || 0; // stage1Scoreを取得
+
     // STAGE2をクリア済みとして記録
     await db.collection('gameIds').doc(gameId).update({
       stage2Completed: true,
       stage2Score: score || 0,
-      stage2CompletedAt: admin.firestore.FieldValue.serverTimestamp()
+      stage2CompletedAt: admin.firestore.FieldValue.serverTimestamp(),
+      totalScore: stage1Score + (score || 0) // totalScoreを更新
     });
-    
+
     // STAGE3用の新しいIDを生成
     let stage3Id = generateRandomId();
     let isUnique = false;
@@ -318,7 +369,10 @@ app.post('/api/stage2-completed', async (req, res) => {
       gameId: stage3Id,
       stage: 3,
       stage3Completed: false,
-      score: 0,
+      // score: 0, // scoreフィールドを削除
+      stage1Score: stage1Score, // stage1Scoreをコピー
+      stage2Score: score || 0,    // stage2Scoreをコピー
+      totalScore: stage1Score + (score || 0), // STAGE3開始時点のtotalScore
       status: 'stage2'
     });
       // ユーザーにSTAGE3用のIDと案内を送信
@@ -326,7 +380,8 @@ app.post('/api/stage2-completed', async (req, res) => {
     await client.pushMessage(lineUserId, [
       {
         type: 'text',
-        text: `🎮 STAGE2クリアおめでとうございます！🎮\n\nSTAGE1&2のスコア: ${userData.score + (score || 0)}点\n\nSTAGE3用のIDは「${stage3Id}」です。下のボタンからSTAGE3を開いてください。`
+        // text: `🎮 STAGE2クリアおめでとうございます！🎮\\n\\nSTAGE1&2のスコア: ${userData.score + (score || 0)}点\\n\\nSTAGE3用のIDは「${stage3Id}」です。下のボタンからSTAGE3を開いてください。`
+        text: `🎮 STAGE2クリアおめでとうございます！🎮\\n\\nSTAGE1&2のスコア: ${stage1Score + (score || 0)}点\\n\\nSTAGE3用のIDは「${stage3Id}」です。下のボタンからSTAGE3を開いてください。`
       },
       {
         type: 'template',
@@ -359,137 +414,164 @@ app.post('/api/stage2-completed', async (req, res) => {
 // STAGE3クリア通知を受け取るエンドポイント
 app.post('/api/stage3-completed', async (req, res) => {
   try {
-    const { gameId, score } = req.body;
-    
+    const { gameId, score, nickname } = req.body;
     if (!gameId) {
       return res.status(400).json({ success: false, message: 'gameIdが必要です' });
     }
-    
     // gameIdの存在確認
-    const gameDoc = await db.collection('gameIds').doc(gameId).get();
-    
+    const gameDocRef = db.collection('gameIds').doc(gameId);
+    const gameDoc = await gameDocRef.get();
     if (!gameDoc.exists) {
       return res.status(404).json({ success: false, message: 'IDが見つかりません' });
     }
-    
     const userData = gameDoc.data();
     const lineUserId = userData.lineUserId;
     const originalGameId = userData.originalGameId;
-    
-    // STAGE3をクリア済みとして記録
-    await db.collection('gameIds').doc(gameId).update({
+    // スコア計算
+    let stage1Score = userData.stage1Score || 0;
+    let stage2Score = userData.stage2Score || 0;
+    const stage3Score = score || 0;
+    const totalScore = stage1Score + stage2Score + stage3Score;
+    // Firestore更新
+    const updateData = {
       stage3Completed: true,
-      stage3Score: score || 0,
-      stage3CompletedAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-    
-    // 元のゲームIDのデータを取得して総合スコアを計算
-    let totalScore = score || 0;
-    let stage1And2Score = 0;
-    
+      stage3Score: stage3Score,
+      stage3CompletedAt: admin.firestore.FieldValue.serverTimestamp(),
+      totalScore: totalScore,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      status: "clear"
+    };
+    if (nickname) updateData.nickname = nickname;
+    await gameDocRef.update(updateData);
     if (originalGameId) {
-      const originalGameDoc = await db.collection('gameIds').doc(originalGameId).get();
-      if (originalGameDoc.exists) {
-        const originalData = originalGameDoc.data();
-        stage1And2Score = originalData.score || 0;
-        totalScore += stage1And2Score;
-        
-        // 元のゲームデータにSTAGE3の完了を記録
-        await db.collection('gameIds').doc(originalGameId).update({
-          stage3Completed: true,
-          stage3Id: gameId,
-          stage3Score: score || 0,
-          totalScore: totalScore,
-          completedAt: admin.firestore.FieldValue.serverTimestamp()
-        });
-      }
+      const originalGameDocRef = db.collection('gameIds').doc(originalGameId);
+      const originalUpdateData = {
+        stage3Score: stage3Score,
+        totalScore: totalScore,
+        stage3Completed: true,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        status: "clear"
+      };
+      if (nickname) originalUpdateData.nickname = nickname;
+      await originalGameDocRef.update(originalUpdateData);
     }
-    
-    // ユーザーに最終スコアを通知
+    // おしゃれなエンディングFlex Message
     const client = new line.Client(config);
-    let messages;
-    // デバッグ判定: 仮スコア=1250
-    let isDebug = false;
-    let debugStage1Score = 0;
-    let debugStage2Score = 0;
-    if (originalGameId) {
-      const originalGameDoc = await db.collection('gameIds').doc(originalGameId).get();
-      if (originalGameDoc.exists) {
-        const originalData = originalGameDoc.data();
-        if (originalData.score === 1250) {
-          isDebug = true;
-          debugStage1Score = originalData.stage1Score || 0;
-          debugStage2Score = originalData.stage2Score || 0;
+    const endingMessage = {
+      type: 'flex',
+      altText: '🎉エンディング🎉 無事に福工大前へ！',
+      contents: {
+        type: 'bubble',
+        size: 'mega',
+        hero: {
+          type: 'image',
+          url: 'https://asia-northeast1-nesugoshipanic.cloudfunctions.net/app/chinkani.png',
+          size: 'full',
+          aspectRatio: '20:13',
+          aspectMode: 'cover',
+        },
+        body: {
+          type: 'box',
+          layout: 'vertical',
+          spacing: 'md',
+          contents: [
+            {
+              type: 'text',
+              text: '🎉 CONGRATULATIONS! 🎉',
+              weight: 'bold',
+              size: 'xxl',
+              align: 'center',
+              color: '#1DB446',
+              margin: 'md',
+              decoration: 'underline',
+            },
+            {
+              type: 'box',
+              layout: 'vertical',
+              margin: 'lg',
+              contents: [
+                {
+                  type: 'text',
+                  text: '全ての試練を乗り越え、ついに福工大前駅へ到着！',
+                  wrap: true,
+                  size: 'md',
+                  align: 'center',
+                  color: '#333333',
+                  margin: 'md',
+                },
+                {
+                  type: 'text',
+                  text: `${nickname ? `ニックネーム「${nickname}」さん、` : ''}あなたの総合スコアは` ,
+                  wrap: true,
+                  size: 'md',
+                  align: 'center',
+                  color: '#333333',
+                  margin: 'md',
+                },
+                {
+                  type: 'text',
+                  text: `${totalScore} 点`,
+                  weight: 'bold',
+                  size: 'xxl',
+                  align: 'center',
+                  color: '#e67e22',
+                  margin: 'md',
+                },
+                {
+                  type: 'text',
+                  text: '遅刻の危機は去りました！今日の講義もバッチリですね。\n素晴らしい学生生活を！✨',
+                  wrap: true,
+                  size: 'sm',
+                  align: 'center',
+                  margin: 'lg',
+                  color: '#555555'
+                }
+              ]
+            }
+          ]
+        },
+        footer: {
+          type: 'box',
+          layout: 'vertical',
+          spacing: 'sm',
+          contents: [
+            {
+              type: 'button',
+              style: 'primary',
+              color: '#1DB446',
+              action: {
+                type: 'postback',
+                label: 'ランキングを見る',
+                data: 'show_ranking',
+                displayText: 'ランキングを見る'
+              },
+              height: 'sm'
+            },
+            {
+              type: 'button',
+              style: 'secondary',
+              color: '#e67e22',
+              action: {
+                type: 'postback',
+                label: 'もう一度挑戦する',
+                data: 'generate_id',
+                displayText: 'もう一度挑戦する'
+              },
+              height: 'sm',
+              margin: 'sm'
+            }
+          ]
         }
       }
+    };
+    if (lineUserId) {
+      try {
+        await client.pushMessage(lineUserId, endingMessage);
+      } catch (pushError) {
+        console.error('STAGE3クリアメッセージ送信エラー:', pushError);
+      }
     }
-
-    if (isDebug) {
-      // デバッグ用通知
-      messages = [
-        {
-          type: 'text',
-          text: `🎊 デバッグモード: ゲーム完了 🎊`
-        },
-        {
-          type: 'text',
-          text:
-            `📊 デバッグ最終スコア 📊\n\n仮スコア: 1250点 (STAGE1: ${debugStage1Score}点, STAGE2: ${debugStage2Score}点)` +
-            `\nSTAGE3: ${score || 0}点\n\n合計: ${1250 + (score || 0)}点`
-        },
-        {
-          type: 'template',
-          altText: 'ランキングを見る',
-          template: {
-            type: 'buttons',
-            text: 'あなたのスコアがランキングに反映されました！',
-            actions: [
-              {
-                type: 'postback',
-                label: 'ランキングを見る',
-                data: 'show_ranking',
-                displayText: 'ランキングを見たい'
-              }
-            ]
-          }
-        }
-      ];
-    } else {
-      // 通常通知
-      messages = [
-        {
-          type: 'text',
-          text: `🎊 ゲーム完了おめでとうございます！🎊`
-        },
-        {
-          type: 'text',
-          text: `📊 最終スコア 📊\n\nSTAGE1&2: ${stage1And2Score}点\nSTAGE3: ${score || 0}点\n\n合計: ${totalScore}点`
-        },
-        {
-          type: 'template',
-          altText: 'ランキングを見る',
-          template: {
-            type: 'buttons',
-            text: 'あなたのスコアがランキングに反映されました！',
-            actions: [
-              {
-                type: 'postback',
-                label: 'ランキングを見る',
-                data: 'show_ranking',
-                displayText: 'ランキングを見たい'
-              }
-            ]
-          }
-        }
-      ];
-    }
-    await client.pushMessage(lineUserId, messages);
-
-    return res.json({ 
-      success: true, 
-      message: 'ゲーム完了処理完了',
-      totalScore: isDebug ? (1250 + (score || 0)) : totalScore 
-    });
+    res.json({ success: true, message: 'STAGE3クリア処理が完了しました' });
   } catch (error) {
     console.error('STAGE3クリア処理エラー:', error);
     return res.status(500).json({ success: false, message: 'サーバーエラーが発生しました' });
@@ -742,7 +824,7 @@ app.get('/line-login-callback', async (req, res) => {
     if (!lineUserId) return res.status(400).send('userIdが取得できません');
 
     // Firestoreに保存
-    await db.collection('users').doc(lineUserId).set({ email }, { merge: true });
+    await db.collection('users').doc(lineUserId).set({ email, lineUserId }, { merge: true });
 
     // --- ここからメール送信処理 ---
     // nodemailerでGmail経由でメール送信（functions.config().gmail から設定取得）
@@ -759,32 +841,55 @@ app.get('/line-login-callback', async (req, res) => {
           .where('stage', '==', 1)
           .limit(1)
           .get();
-        if (!gameIdSnap.empty) {
-          gameId = gameIdSnap.docs[0].id;
-        } else {
-          // 新規発行
-          let newId = generateRandomId();
-          let isUnique = false;
-          while (!isUnique) {
-            const idCheck = await db.collection('gameIds').doc(newId).get();
-            if (!idCheck.exists) {
-              isUnique = true;
-            } else {
-              newId = generateRandomId();
-            }
+        // 毎回新しいIDを発行（同じアカウントでも重複しない）
+        let newId = generateRandomId();
+        let isUnique = false;
+        while (!isUnique) {
+          const idCheck = await db.collection('gameIds').doc(newId).get();
+          if (!idCheck.exists) {
+            isUnique = true;
+          } else {
+            newId = generateRandomId();
           }
-          await db.collection('gameIds').doc(newId).set({
-            lineUserId: lineUserId,
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            gameId: newId,
-            stage: 1,
-            status: 'new',
-            score: 0
-          });
-          gameId = newId;
         }
+
+        // LINEクライアントを初期化してユーザープロフィールを取得
+        let displayName = 'プレイヤー';
+        let pictureUrl = '';
+        try {
+          const client = new line.Client(config);
+          const profile = await client.getProfile(lineUserId);
+          displayName = profile.displayName;
+          pictureUrl = profile.pictureUrl || '';
+        } catch (profileError) {
+          console.warn(`LINEユーザープロフィールの取得に失敗しました (ID: ${lineUserId}):`, profileError);
+          // プロフィール取得エラーでも処理は続行
+        }
+
+        // Firestoreにゲーム情報を保存
+        await db.collection('gameIds').doc(newId).set({
+          lineUserId: lineUserId,
+          lineUserProfile: {
+            displayName: displayName,
+            pictureUrl: pictureUrl
+          },
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          gameId: newId,
+          stage: 1,
+          status: 'active',
+          stage1Completed: false,
+          stage2Completed: false,
+          stage3Completed: false,
+          stage1Score: 0,
+          stage2Score: 0,
+          stage3Score: 0,
+          totalScore: 0
+        });
+        gameId = newId;
+
         // STAGE1のURLにgameIdをクエリパラメータで付与
-        const stage1Url = `https://nesupani-react.vercel.app/bikegame?id=${gameId}`;
+        const stage1Url = `https://nesupani-react.vercel.app/?id=${gameId}`;
         const transporter = nodemailer.createTransport({
           service: 'gmail',
           auth: {
