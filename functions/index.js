@@ -1,3 +1,4 @@
+// ↓↓↓ ここから下、const app = express(); より後ろに移動してください ↓↓↓
 const functions = require('firebase-functions');
 const express = require('express');
 const line = require('@line/bot-sdk');
@@ -10,6 +11,60 @@ admin.initializeApp();
 const db = admin.firestore();
 
 const app = express();
+
+// ランキングAPI（lineUserIdごとに最高スコア1件のみ）
+app.get('/api/ranking', async (req, res) => {
+  try {
+    // まず全クリア済みデータをスコア順で取得（最大1000件など制限推奨）
+    const snapshot = await db.collection('gameIds')
+      .where('status', '==', 'clear')
+      .orderBy('totalScore', 'desc')
+      .limit(1000)
+      .get();
+
+    // lineUserIdごとに最高スコア1件だけ残す
+    const userBestMap = new Map();
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      if (!data.lineUserId) return;
+      if (!userBestMap.has(data.lineUserId) || userBestMap.get(data.lineUserId).totalScore < data.totalScore) {
+        userBestMap.set(data.lineUserId, { ...data, id: doc.id });
+      }
+    });
+
+    // スコア順に並び替え（念のため）
+    const ranking = Array.from(userBestMap.values())
+      .sort((a, b) => b.totalScore - a.totalScore)
+      .slice(0, 50); // 上位50件だけ返す
+
+    res.json({ ranking });
+  } catch (e) {
+    console.error('ランキング取得エラー:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// 古いgameIdsを自動削除するバッチ
+app.post('/api/cleanup-gameids', async (req, res) => {
+  const MAX_COUNT = 500; // 残す最大件数
+  try {
+    const snapshot = await db.collection('gameIds')
+      .orderBy('createdAt', 'asc')
+      .get();
+    if (snapshot.size <= MAX_COUNT) {
+      return res.json({ deleted: 0, message: '削除不要' });
+    }
+    const deleteCount = snapshot.size - MAX_COUNT;
+    const docsToDelete = snapshot.docs.slice(0, deleteCount);
+    const batch = db.batch();
+    docsToDelete.forEach(doc => batch.delete(doc.ref));
+    await batch.commit();
+    res.json({ deleted: deleteCount, message: '古いgameIdを削除しました' });
+  } catch (e) {
+    console.error('gameIdsクリーンアップエラー:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // --- CORS対応: すべてのAPIにCORSヘッダーを付与 ---
 app.use((req, res, next) => {
@@ -44,9 +99,175 @@ app.post('/api/line-notify', async (req, res) => {
         text: `ゲームオーバー！\n残念ながら、福工大前で降りることができませんでした。\nスコア: 0点\n\nもう一度チャレンジしてみましょう！`
       };
     } else {
+      // トータルスコアをFirestoreから取得（なければscoreを使う）
+      let totalScore = score;
+      let stage1 = 0, stage2 = 0, stage3 = score;
+      try {
+        // まずSTAGE3クリア済みの最新gameIdを取得
+        const stage3Snap = await db.collection('gameIds')
+          .where('lineUserId', '==', userId)
+          .where('stage', '==', 3)
+          .where('stage3Completed', '==', true)
+          .orderBy('createdAt', 'desc')
+          .limit(1)
+          .get();
+        if (!stage3Snap.empty) {
+          const stage3Data = stage3Snap.docs[0].data();
+          // ここで直接スコアを取得
+          stage1 = typeof stage3Data.stage1Score === 'number' ? stage3Data.stage1Score : 0;
+          stage2 = typeof stage3Data.stage2Score === 'number' ? stage3Data.stage2Score : 0;
+          stage3 = typeof stage3Data.stage3Score === 'number' ? stage3Data.stage3Score : score;
+          totalScore = stage1 + stage2 + stage3;
+        }
+      } catch (e) {
+        // 取得失敗時はscoreのみ
+      }
       message = {
-        type: 'text',
-        text: `おめでとうございます！\n福工大前で無事に降りることができました！\nスコア: ${score}点`
+        type: 'flex',
+        altText: '🎉エンディング🎉 無事に福工大前へ！',
+        contents: {
+          type: 'bubble',
+          size: 'mega',
+          hero: {
+            type: 'image',
+            url: 'https://asia-northeast1-nesugoshipanic.cloudfunctions.net/app/chinkani.png',
+            size: 'full',
+            aspectRatio: '20:13',
+            aspectMode: 'cover',
+          },
+          body: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'md',
+            contents: [
+              {
+                type: 'box',
+                layout: 'horizontal',
+                contents: [
+                  {
+                    type: 'text',
+                    text: '🎉 CONGRATULATIONS! 🎉',
+                    weight: 'bold',
+                    size: 'lg',
+                    align: 'center',
+                    color: '#1DB446',
+                    flex: 1
+                  }
+                ]
+              },
+              {
+                type: 'text',
+                text: '全ての試練を乗り越え、ついに福工大前駅へ到着！',
+                wrap: true,
+                size: 'md',
+                align: 'center',
+                color: '#333333',
+                margin: 'md',
+              },
+              {
+                type: 'separator',
+                margin: 'md'
+              },
+              {
+                type: 'box',
+                layout: 'vertical',
+                margin: 'md',
+                contents: [
+                  {
+                    type: 'text',
+                    text: 'あなたの総合スコア',
+                    size: 'md',
+                    align: 'center',
+                    color: '#1DB446',
+                    weight: 'bold',
+                  },
+                  {
+                    type: 'text',
+                    text: `${totalScore} 点`,
+                    weight: 'bold',
+                    size: 'xxl',
+                    align: 'center',
+                    color: '#e67e22',
+                    margin: 'sm',
+                  },
+                  {
+                    type: 'box',
+                    layout: 'horizontal',
+                    margin: 'md',
+                    contents: [
+                      {
+                        type: 'text',
+                        text: `STAGE1: ${stage1}点`,
+                        size: 'xs',
+                        color: '#888888',
+                        flex: 1
+                      },
+                      {
+                        type: 'text',
+                        text: `STAGE2: ${stage2}点`,
+                        size: 'xs',
+                        color: '#888888',
+                        flex: 1
+                      },
+                      {
+                        type: 'text',
+                        text: `STAGE3: ${stage3}点`,
+                        size: 'xs',
+                        color: '#888888',
+                        flex: 1
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                type: 'separator',
+                margin: 'md'
+              },
+              {
+                type: 'text',
+                text: '遅刻の危機は去りました！今日の講義もバッチリですね。\n素晴らしい学生生活を！✨',
+                wrap: true,
+                size: 'sm',
+                align: 'center',
+                margin: 'lg',
+                color: '#555555'
+              }
+            ]
+          },
+          footer: {
+            type: 'box',
+            layout: 'vertical',
+            spacing: 'sm',
+            contents: [
+              {
+                type: 'button',
+                style: 'primary',
+                color: '#1DB446',
+                action: {
+                  type: 'postback',
+                  label: 'ランキングを見る',
+                  data: 'show_ranking',
+                  displayText: 'ランキングを見る'
+                },
+                height: 'sm'
+              },
+              {
+                type: 'button',
+                style: 'secondary',
+                color: '#e67e22',
+                action: {
+                  type: 'postback',
+                  label: 'もう一度挑戦する',
+                  data: 'generate_id',
+                  displayText: 'もう一度挑戦する'
+                },
+                height: 'sm',
+                margin: 'sm'
+              }
+            ]
+          }
+        }
       };
     }
     // LINE Messaging APIを使用してメッセージを送信
@@ -205,9 +426,18 @@ app.post('/api/update-progress', async (req, res) => {
     const updateData = {};
     if (stage) updateData[`stage${stage}Completed`] = completed || false;
     if (score !== undefined) updateData.score = score;
-    
+
+    // ステージクリア時は専用フィールドも更新
+    if (completed && score !== undefined) {
+      if (stage == 1) {
+        updateData.stage1Score = score;
+      } else if (stage == 2) {
+        updateData.stage2Score = score;
+      }
+    }
+
     await docRef.update(updateData);
-    
+
     return res.json({ success: true, message: '進捗が更新されました' });
   } catch (error) {
     console.error('進捗更新エラー:', error);
@@ -338,7 +568,22 @@ app.post('/api/stage2-completed', async (req, res) => {
     
     const userData = gameDoc.data();
     const lineUserId = userData.lineUserId;
-    const stage1Score = userData.stage1Score || 0; // stage1Scoreを取得
+    let stage1Score = userData.stage1Score;
+    // stage1Scoreがundefinedの場合、originalGameId（STAGE1のgameId）から補完
+    if (stage1Score === undefined && userData.originalGameId) {
+      try {
+        const originalGameDoc = await db.collection('gameIds').doc(userData.originalGameId).get();
+        if (originalGameDoc.exists) {
+          const originalData = originalGameDoc.data();
+          if (originalData.stage1Score !== undefined) {
+            stage1Score = originalData.stage1Score;
+          }
+        }
+      } catch (e) {
+        console.error('STAGE2: originalGameIdからstage1Score補完失敗:', e);
+      }
+    }
+    stage1Score = stage1Score || 0; // 0点も許容
 
     // STAGE2をクリア済みとして記録
     await db.collection('gameIds').doc(gameId).update({
@@ -366,6 +611,7 @@ app.post('/api/stage2-completed', async (req, res) => {
       lineUserId: lineUserId,
       originalGameId: gameId, // 元のゲームIDを関連付け
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       gameId: stage3Id,
       stage: 3,
       stage3Completed: false,
@@ -428,9 +674,29 @@ app.post('/api/stage3-completed', async (req, res) => {
     const lineUserId = userData.lineUserId;
     const originalGameId = userData.originalGameId;
     // スコア計算
-    let stage1Score = userData.stage1Score || 0;
-    let stage2Score = userData.stage2Score || 0;
+    let stage1Score = userData.stage1Score;
+    let stage2Score = userData.stage2Score;
     const stage3Score = score || 0;
+
+    // stage1Score, stage2Scoreがundefinedの場合のみoriginalGameIdから補完
+    if ((stage1Score === undefined || stage2Score === undefined) && originalGameId) {
+      try {
+        const originalGameDoc = await db.collection('gameIds').doc(originalGameId).get();
+        if (originalGameDoc.exists) {
+          const originalData = originalGameDoc.data();
+          if (stage1Score === undefined && originalData.stage1Score !== undefined) {
+            stage1Score = originalData.stage1Score;
+          }
+          if (stage2Score === undefined && originalData.stage2Score !== undefined) {
+            stage2Score = originalData.stage2Score;
+          }
+        }
+      } catch (e) {
+        console.error('originalGameIdからスコア補完失敗:', e);
+      }
+    }
+    stage1Score = stage1Score || 0;
+    stage2Score = stage2Score || 0;
     const totalScore = stage1Score + stage2Score + stage3Score;
     // Firestore更新
     const updateData = {
@@ -439,7 +705,9 @@ app.post('/api/stage3-completed', async (req, res) => {
       stage3CompletedAt: admin.firestore.FieldValue.serverTimestamp(),
       totalScore: totalScore,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      status: "clear"
+      status: "clear",
+      stage1Score: stage1Score,
+      stage2Score: stage2Score
     };
     if (nickname) updateData.nickname = nickname;
     await gameDocRef.update(updateData);
@@ -450,7 +718,9 @@ app.post('/api/stage3-completed', async (req, res) => {
         totalScore: totalScore,
         stage3Completed: true,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        status: "clear"
+        status: "clear",
+        stage1Score: stage1Score,
+        stage2Score: stage2Score
       };
       if (nickname) originalUpdateData.nickname = nickname;
       await originalGameDocRef.update(originalUpdateData);
@@ -501,7 +771,7 @@ app.post('/api/stage3-completed', async (req, res) => {
                 },
                 {
                   type: 'text',
-                  text: `${nickname ? `ニックネーム「${nickname}」さん、` : ''}あなたの総合スコアは` ,
+                  text: `${nickname ? `ニックネーム「${nickname}」さん、` : ''}あなたのスコア詳細`,
                   wrap: true,
                   size: 'md',
                   align: 'center',
@@ -509,13 +779,40 @@ app.post('/api/stage3-completed', async (req, res) => {
                   margin: 'md',
                 },
                 {
-                  type: 'text',
-                  text: `${totalScore} 点`,
-                  weight: 'bold',
-                  size: 'xxl',
-                  align: 'center',
-                  color: '#e67e22',
-                  margin: 'md',
+                  type: 'box',
+                  layout: 'vertical',
+                  margin: 'sm',
+                  contents: [
+                    {
+                      type: 'text',
+                      text: `STAGE1: ${stage1Score} 点`,
+                      size: 'sm',
+                      color: '#2980b9',
+                      margin: 'sm',
+                    },
+                    {
+                      type: 'text',
+                      text: `STAGE2: ${stage2Score} 点`,
+                      size: 'sm',
+                      color: '#27ae60',
+                      margin: 'sm',
+                    },
+                    {
+                      type: 'text',
+                      text: `STAGE3: ${stage3Score} 点`,
+                      size: 'sm',
+                      color: '#e67e22',
+                      margin: 'sm',
+                    },
+                    {
+                      type: 'text',
+                      text: `合計: ${totalScore} 点`,
+                      weight: 'bold',
+                      size: 'md',
+                      color: '#e67e22',
+                      margin: 'md',
+                    }
+                  ]
                 },
                 {
                   type: 'text',
